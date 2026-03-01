@@ -15,10 +15,13 @@ export interface PeriodInfo {
   'periodNumber' : bigint,
 }
 export interface Prediction { 'result' : string, 'periodNumber' : bigint }
+export interface VisitorStats { 'onlineNow' : bigint, 'totalVisits' : bigint }
 export interface _SERVICE {
   'authenticate' : ActorMethod<[string], undefined>,
   'getCurrentPeriodInfo' : ActorMethod<[], PeriodInfo>,
   'getPrediction' : ActorMethod<[bigint], Prediction>,
+  'getVisitorStats' : ActorMethod<[], VisitorStats>,
+  'heartbeat' : ActorMethod<[], undefined>,
   'validateSession' : ActorMethod<[], undefined>,
 }
 export declare const idlService: IDL.ServiceClass;

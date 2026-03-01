@@ -1,6 +1,10 @@
 import {
+  Activity,
+  AlertTriangle,
+  Brain,
   Download,
   ExternalLink,
+  Eye,
   History,
   LogOut,
   MessageCircle,
@@ -8,12 +12,18 @@ import {
   Smartphone,
   Trophy,
   UserPlus,
+  Users,
   Wifi,
   Zap,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useCurrentPeriodInfo, useGetPrediction } from "../hooks/useQueries";
+import {
+  useCurrentPeriodInfo,
+  useGetPrediction,
+  useHeartbeat,
+  useVisitorStats,
+} from "../hooks/useQueries";
 import { clearSession } from "../utils/session";
 
 interface PredictionPageProps {
@@ -54,6 +64,68 @@ function formatPeriodNumber(n: bigint): string {
   return n.toString().padStart(12, "0");
 }
 
+interface AnalysisData {
+  lastNumber: number;
+  lastResult: "BIG" | "SMALL";
+  streak: number;
+  streakType: "BIG" | "SMALL";
+  bigProb: number;
+  smallProb: number;
+  streakAlert: boolean;
+  aiPrediction: "BIG" | "SMALL";
+  aiConfidence: number;
+}
+
+function computeAnalysis(history: BettingHistoryEntry[]): AnalysisData | null {
+  if (history.length === 0) return null;
+
+  const results = history.map((h) => h.result);
+
+  // Streak
+  let streak = 1;
+  const streakType = results[0];
+  for (let i = 1; i < results.length; i++) {
+    if (results[i] === streakType) streak++;
+    else break;
+  }
+
+  // Probabilities from past data
+  const bigCount = results.filter((r) => r === "BIG").length;
+  const _smallCount = results.length - bigCount;
+  const bigProb = Math.round((bigCount / results.length) * 100);
+  const smallProb = 100 - bigProb;
+
+  // Simple number from period (last digit of period)
+  const lastPeriodStr = history[0].period;
+  const lastNumber = Number.parseInt(lastPeriodStr.slice(-1), 10);
+
+  // AI prediction logic: reversal after long streak, else follow probability
+  const streakAlert = streak >= 3;
+  let aiPrediction: "BIG" | "SMALL";
+  let aiConfidence: number;
+
+  if (streakAlert) {
+    // Suggest reversal
+    aiPrediction = streakType === "BIG" ? "SMALL" : "BIG";
+    aiConfidence = Math.min(55 + streak * 5, 85);
+  } else {
+    aiPrediction = bigProb >= smallProb ? "BIG" : "SMALL";
+    aiConfidence = Math.max(bigProb, smallProb);
+  }
+
+  return {
+    lastNumber,
+    lastResult: streakType,
+    streak,
+    streakType,
+    bigProb,
+    smallProb,
+    streakAlert,
+    aiPrediction,
+    aiConfidence,
+  };
+}
+
 function formatCountdown(seconds: bigint): string {
   const secs = Number(seconds);
   const m = Math.floor(secs / 60);
@@ -85,6 +157,8 @@ export default function PredictionPage({ onLogout }: PredictionPageProps) {
 
   const periodInfoQuery = useCurrentPeriodInfo();
   const predictionQuery = useGetPrediction(displayPeriod);
+  const visitorStatsQuery = useVisitorStats();
+  const { mutate: sendHeartbeat } = useHeartbeat();
 
   // Sync local countdown from server data
   useEffect(() => {
@@ -132,6 +206,18 @@ export default function PredictionPage({ onLogout }: PredictionPageProps) {
     }
     prevPeriodRef.current = current;
   }, [displayPeriod]);
+
+  // Heartbeat — mark user as online every 3 minutes
+  useEffect(() => {
+    sendHeartbeat();
+    const interval = setInterval(
+      () => {
+        sendHeartbeat();
+      },
+      3 * 60 * 1000,
+    );
+    return () => clearInterval(interval);
+  }, [sendHeartbeat]);
 
   const seconds = periodInfoQuery.data
     ? Number(periodInfoQuery.data.secondsRemaining)
@@ -403,6 +489,86 @@ export default function PredictionPage({ onLogout }: PredictionPageProps) {
             &nbsp;|&nbsp; 🎯 WINGO 1-MIN RESULT TRACKING Analysis &nbsp;|&nbsp;
             DIRECT ANSWER:100% SURESHOT &nbsp;|&nbsp; Big - Small prediction
             &nbsp;|&nbsp;
+          </div>
+        </div>
+
+        {/* Visitor stats bar */}
+        <div
+          className="mt-1.5 flex items-center justify-start gap-0 rounded overflow-hidden"
+          style={{
+            background: "oklch(0.065 0.01 240)",
+            border: "1px solid oklch(0.82 0.22 142 / 0.08)",
+          }}
+        >
+          <div
+            className="flex items-center gap-1.5 px-3 py-1.5"
+            style={{ fontFamily: '"Geist Mono", monospace' }}
+          >
+            <Eye
+              className="w-3 h-3 shrink-0"
+              style={{ color: "oklch(0.72 0.2 200)" }}
+            />
+            <span
+              className="text-xs tracking-wider"
+              style={{ color: "oklch(0.42 0.05 200)" }}
+            >
+              TOTAL VISITORS:
+            </span>
+            <span
+              className="text-xs font-bold"
+              style={{
+                color: "oklch(0.82 0.22 142)",
+                textShadow: "0 0 8px oklch(0.82 0.22 142 / 0.6)",
+              }}
+            >
+              {visitorStatsQuery.data
+                ? Number(visitorStatsQuery.data.totalVisits).toLocaleString()
+                : "—"}
+            </span>
+          </div>
+
+          {/* Divider */}
+          <div
+            className="w-px self-stretch"
+            style={{ background: "oklch(0.82 0.22 142 / 0.12)" }}
+          />
+
+          <div
+            className="flex items-center gap-1.5 px-3 py-1.5"
+            style={{ fontFamily: '"Geist Mono", monospace' }}
+          >
+            <Users
+              className="w-3 h-3 shrink-0"
+              style={{ color: "oklch(0.72 0.25 142)" }}
+            />
+            <span
+              className="text-xs tracking-wider"
+              style={{ color: "oklch(0.42 0.05 200)" }}
+            >
+              ONLINE NOW:
+            </span>
+            <span
+              className="text-xs font-bold"
+              style={{
+                color: "oklch(0.75 0.25 142)",
+                textShadow: "0 0 8px oklch(0.75 0.25 142 / 0.7)",
+              }}
+            >
+              {visitorStatsQuery.data
+                ? Number(visitorStatsQuery.data.onlineNow).toLocaleString()
+                : "—"}
+            </span>
+            {visitorStatsQuery.data &&
+              Number(visitorStatsQuery.data.onlineNow) > 0 && (
+                <span
+                  className="w-1.5 h-1.5 rounded-full inline-block shrink-0"
+                  style={{
+                    background: "oklch(0.75 0.25 142)",
+                    boxShadow: "0 0 5px oklch(0.75 0.25 142 / 0.9)",
+                    animation: "dotPulse 1.4s ease-in-out infinite",
+                  }}
+                />
+              )}
           </div>
         </div>
       </header>
@@ -739,6 +905,315 @@ export default function PredictionPage({ onLogout }: PredictionPageProps) {
             </div>
           ))}
         </motion.div>
+
+        {/* ─── Nano AI Analysis Panel ─── */}
+        {(() => {
+          const analysis = computeAnalysis(bettingHistory);
+          if (!analysis) return null;
+          return (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.6 }}
+              className="mt-6 w-full max-w-lg"
+            >
+              <div
+                className="circuit-border rounded-xl overflow-hidden"
+                style={{
+                  background:
+                    "linear-gradient(160deg, oklch(0.09 0.014 270), oklch(0.07 0.01 260))",
+                  boxShadow:
+                    "0 0 30px oklch(0.68 0.28 290 / 0.1), 0 0 60px oklch(0.68 0.28 290 / 0.05)",
+                  borderColor: "oklch(0.68 0.28 290 / 0.3)",
+                }}
+              >
+                {/* Panel header */}
+                <div
+                  className="px-5 py-3 flex items-center justify-between"
+                  style={{
+                    background: "oklch(0.1 0.018 270)",
+                    borderBottom: "1px solid oklch(0.68 0.28 290 / 0.2)",
+                  }}
+                >
+                  <div className="flex items-center gap-2">
+                    <Brain
+                      className="w-4 h-4"
+                      style={{ color: "oklch(0.78 0.22 290)" }}
+                    />
+                    <span
+                      className="text-xs tracking-widest font-bold"
+                      style={{
+                        color: "oklch(0.78 0.22 290)",
+                        fontFamily: '"Geist Mono", monospace',
+                      }}
+                    >
+                      NANO AI ANALYSIS
+                    </span>
+                  </div>
+                  <Activity
+                    className="w-3.5 h-3.5"
+                    style={{ color: "oklch(0.68 0.28 290 / 0.6)" }}
+                  />
+                </div>
+
+                <div className="px-5 py-4 space-y-3">
+                  {/* Stats grid */}
+                  <div className="grid grid-cols-2 gap-3">
+                    {/* Last Number */}
+                    <div
+                      className="px-3 py-2.5 rounded"
+                      style={{
+                        background: "oklch(0.085 0.012 240)",
+                        border: "1px solid oklch(0.68 0.28 290 / 0.15)",
+                      }}
+                    >
+                      <p
+                        className="text-xs tracking-wider mb-1"
+                        style={{
+                          color: "oklch(0.4 0.05 200)",
+                          fontFamily: '"Geist Mono", monospace',
+                        }}
+                      >
+                        🎯 LAST NUMBER
+                      </p>
+                      <p
+                        className="text-2xl font-bold"
+                        style={{
+                          color: "oklch(0.88 0.18 60)",
+                          fontFamily: '"Geist Mono", monospace',
+                          textShadow: "0 0 10px oklch(0.88 0.18 60 / 0.5)",
+                        }}
+                      >
+                        {analysis.lastNumber}
+                      </p>
+                    </div>
+
+                    {/* Result */}
+                    <div
+                      className="px-3 py-2.5 rounded"
+                      style={{
+                        background: "oklch(0.085 0.012 240)",
+                        border: "1px solid oklch(0.68 0.28 290 / 0.15)",
+                      }}
+                    >
+                      <p
+                        className="text-xs tracking-wider mb-1"
+                        style={{
+                          color: "oklch(0.4 0.05 200)",
+                          fontFamily: '"Geist Mono", monospace',
+                        }}
+                      >
+                        📊 RESULT
+                      </p>
+                      <p
+                        className="text-xl font-bold"
+                        style={{
+                          color:
+                            analysis.lastResult === "BIG"
+                              ? "oklch(0.82 0.22 142)"
+                              : "oklch(0.65 0.28 22)",
+                          fontFamily: '"Geist Mono", monospace',
+                          textShadow:
+                            analysis.lastResult === "BIG"
+                              ? "0 0 10px oklch(0.82 0.22 142 / 0.6)"
+                              : "0 0 10px oklch(0.65 0.28 22 / 0.6)",
+                        }}
+                      >
+                        {analysis.lastResult}
+                      </p>
+                    </div>
+
+                    {/* Streak */}
+                    <div
+                      className="px-3 py-2.5 rounded"
+                      style={{
+                        background: "oklch(0.085 0.012 240)",
+                        border: `1px solid ${analysis.streakAlert ? "oklch(0.88 0.22 60 / 0.4)" : "oklch(0.68 0.28 290 / 0.15)"}`,
+                      }}
+                    >
+                      <p
+                        className="text-xs tracking-wider mb-1"
+                        style={{
+                          color: "oklch(0.4 0.05 200)",
+                          fontFamily: '"Geist Mono", monospace',
+                        }}
+                      >
+                        🔥 STREAK
+                      </p>
+                      <p
+                        className="text-xl font-bold"
+                        style={{
+                          color: analysis.streakAlert
+                            ? "oklch(0.88 0.22 60)"
+                            : "oklch(0.78 0.22 290)",
+                          fontFamily: '"Geist Mono", monospace',
+                        }}
+                      >
+                        {analysis.streak}{" "}
+                        <span className="text-sm">{analysis.streakType}</span>
+                      </p>
+                    </div>
+
+                    {/* AI Prediction */}
+                    <div
+                      className="px-3 py-2.5 rounded"
+                      style={{
+                        background:
+                          analysis.aiPrediction === "BIG"
+                            ? "oklch(0.1 0.025 142 / 0.5)"
+                            : "oklch(0.1 0.025 22 / 0.5)",
+                        border: `1px solid ${analysis.aiPrediction === "BIG" ? "oklch(0.82 0.22 142 / 0.35)" : "oklch(0.65 0.28 22 / 0.35)"}`,
+                      }}
+                    >
+                      <p
+                        className="text-xs tracking-wider mb-1"
+                        style={{
+                          color: "oklch(0.4 0.05 200)",
+                          fontFamily: '"Geist Mono", monospace',
+                        }}
+                      >
+                        🤖 AI NEXT
+                      </p>
+                      <p
+                        className="text-xl font-bold"
+                        style={{
+                          color:
+                            analysis.aiPrediction === "BIG"
+                              ? "oklch(0.82 0.22 142)"
+                              : "oklch(0.65 0.28 22)",
+                          fontFamily: '"Geist Mono", monospace',
+                        }}
+                      >
+                        {analysis.aiPrediction}
+                        <span
+                          className="text-xs ml-1"
+                          style={{ color: "oklch(0.5 0.06 200)" }}
+                        >
+                          {analysis.aiConfidence}%
+                        </span>
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Probability bars */}
+                  <div
+                    className="px-3 py-3 rounded space-y-2"
+                    style={{
+                      background: "oklch(0.085 0.012 240)",
+                      border: "1px solid oklch(0.68 0.28 290 / 0.12)",
+                    }}
+                  >
+                    {/* BIG bar */}
+                    <div>
+                      <div className="flex justify-between mb-1">
+                        <span
+                          className="text-xs tracking-wider"
+                          style={{
+                            color: "oklch(0.82 0.22 142)",
+                            fontFamily: '"Geist Mono", monospace',
+                          }}
+                        >
+                          📈 BIG
+                        </span>
+                        <span
+                          className="text-xs font-bold"
+                          style={{
+                            color: "oklch(0.82 0.22 142)",
+                            fontFamily: '"Geist Mono", monospace',
+                          }}
+                        >
+                          {analysis.bigProb}%
+                        </span>
+                      </div>
+                      <div
+                        className="h-2 rounded-full overflow-hidden"
+                        style={{ background: "oklch(0.12 0.02 240)" }}
+                      >
+                        <motion.div
+                          initial={{ width: 0 }}
+                          animate={{ width: `${analysis.bigProb}%` }}
+                          transition={{ duration: 0.8, ease: "easeOut" }}
+                          className="h-full rounded-full"
+                          style={{
+                            background: "oklch(0.82 0.22 142)",
+                            boxShadow: "0 0 6px oklch(0.82 0.22 142 / 0.5)",
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    {/* SMALL bar */}
+                    <div>
+                      <div className="flex justify-between mb-1">
+                        <span
+                          className="text-xs tracking-wider"
+                          style={{
+                            color: "oklch(0.65 0.28 22)",
+                            fontFamily: '"Geist Mono", monospace',
+                          }}
+                        >
+                          📉 SMALL
+                        </span>
+                        <span
+                          className="text-xs font-bold"
+                          style={{
+                            color: "oklch(0.65 0.28 22)",
+                            fontFamily: '"Geist Mono", monospace',
+                          }}
+                        >
+                          {analysis.smallProb}%
+                        </span>
+                      </div>
+                      <div
+                        className="h-2 rounded-full overflow-hidden"
+                        style={{ background: "oklch(0.12 0.02 240)" }}
+                      >
+                        <motion.div
+                          initial={{ width: 0 }}
+                          animate={{ width: `${analysis.smallProb}%` }}
+                          transition={{ duration: 0.8, ease: "easeOut" }}
+                          className="h-full rounded-full"
+                          style={{
+                            background: "oklch(0.65 0.28 22)",
+                            boxShadow: "0 0 6px oklch(0.65 0.28 22 / 0.5)",
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Streak Alert */}
+                  {analysis.streakAlert && (
+                    <motion.div
+                      initial={{ opacity: 0, scale: 0.95 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      className="flex items-center gap-2 px-3 py-2.5 rounded"
+                      style={{
+                        background: "oklch(0.13 0.03 60 / 0.7)",
+                        border: "1px solid oklch(0.88 0.22 60 / 0.5)",
+                        boxShadow: "0 0 12px oklch(0.88 0.22 60 / 0.15)",
+                      }}
+                    >
+                      <AlertTriangle
+                        className="w-4 h-4 shrink-0"
+                        style={{ color: "oklch(0.88 0.22 60)" }}
+                      />
+                      <p
+                        className="text-xs font-bold tracking-wider"
+                        style={{
+                          color: "oklch(0.88 0.22 60)",
+                          fontFamily: '"Geist Mono", monospace',
+                        }}
+                      >
+                        ⚠️ ALERT: Streak ज़्यादा है, reversal possible
+                      </p>
+                    </motion.div>
+                  )}
+                </div>
+              </div>
+            </motion.div>
+          );
+        })()}
 
         {/* ─── Betting History ─── */}
         <motion.div

@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import type { PeriodInfo, Prediction } from "../backend.d";
+import type { PeriodInfo, Prediction, VisitorStats } from "../backend.d";
 import { useActor } from "./useActor";
 
 // ─── Authenticate ───
@@ -58,5 +58,31 @@ export function useGetPrediction(periodNumber: bigint | null) {
     },
     enabled: !!actor && !isFetching && periodNumber !== null,
     staleTime: 55_000,
+  });
+}
+
+// ─── Visitor Stats ───
+export function useVisitorStats() {
+  const { actor, isFetching } = useActor();
+  return useQuery<VisitorStats>({
+    queryKey: ["visitorStats"],
+    queryFn: async () => {
+      if (!actor) return { totalVisits: BigInt(0), onlineNow: BigInt(0) };
+      return actor.getVisitorStats();
+    },
+    enabled: !!actor && !isFetching,
+    refetchInterval: 30_000,
+    staleTime: 0,
+  });
+}
+
+// ─── Heartbeat ───
+export function useHeartbeat() {
+  const { actor } = useActor();
+  return useMutation({
+    mutationFn: async () => {
+      if (!actor) return;
+      await actor.heartbeat();
+    },
   });
 }

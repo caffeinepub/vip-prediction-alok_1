@@ -16,11 +16,17 @@ export const Prediction = IDL.Record({
   'result' : IDL.Text,
   'periodNumber' : IDL.Int,
 });
+export const VisitorStats = IDL.Record({
+  'onlineNow' : IDL.Nat,
+  'totalVisits' : IDL.Nat,
+});
 
 export const idlService = IDL.Service({
   'authenticate' : IDL.Func([IDL.Text], [], []),
   'getCurrentPeriodInfo' : IDL.Func([], [PeriodInfo], ['query']),
   'getPrediction' : IDL.Func([IDL.Int], [Prediction], ['query']),
+  'getVisitorStats' : IDL.Func([], [VisitorStats], ['query']),
+  'heartbeat' : IDL.Func([], [], []),
   'validateSession' : IDL.Func([], [], []),
 });
 
@@ -35,11 +41,17 @@ export const idlFactory = ({ IDL }) => {
     'result' : IDL.Text,
     'periodNumber' : IDL.Int,
   });
+  const VisitorStats = IDL.Record({
+    'onlineNow' : IDL.Nat,
+    'totalVisits' : IDL.Nat,
+  });
   
   return IDL.Service({
     'authenticate' : IDL.Func([IDL.Text], [], []),
     'getCurrentPeriodInfo' : IDL.Func([], [PeriodInfo], ['query']),
     'getPrediction' : IDL.Func([IDL.Int], [Prediction], ['query']),
+    'getVisitorStats' : IDL.Func([], [VisitorStats], ['query']),
+    'heartbeat' : IDL.Func([], [], []),
     'validateSession' : IDL.Func([], [], []),
   });
 };

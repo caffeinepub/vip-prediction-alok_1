@@ -89,18 +89,24 @@ export class ExternalBlob {
         return this;
     }
 }
-export interface Prediction {
-    result: string;
-    periodNumber: bigint;
-}
 export interface PeriodInfo {
     secondsRemaining: bigint;
+    periodNumber: bigint;
+}
+export interface VisitorStats {
+    onlineNow: bigint;
+    totalVisits: bigint;
+}
+export interface Prediction {
+    result: string;
     periodNumber: bigint;
 }
 export interface backendInterface {
     authenticate(inputPassword: string): Promise<void>;
     getCurrentPeriodInfo(): Promise<PeriodInfo>;
     getPrediction(periodNumber: bigint): Promise<Prediction>;
+    getVisitorStats(): Promise<VisitorStats>;
+    heartbeat(): Promise<void>;
     validateSession(): Promise<void>;
 }
 export class Backend implements backendInterface {
@@ -144,6 +150,34 @@ export class Backend implements backendInterface {
             }
         } else {
             const result = await this.actor.getPrediction(arg0);
+            return result;
+        }
+    }
+    async getVisitorStats(): Promise<VisitorStats> {
+        if (this.processError) {
+            try {
+                const result = await this.actor.getVisitorStats();
+                return result;
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            const result = await this.actor.getVisitorStats();
+            return result;
+        }
+    }
+    async heartbeat(): Promise<void> {
+        if (this.processError) {
+            try {
+                const result = await this.actor.heartbeat();
+                return result;
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            const result = await this.actor.heartbeat();
             return result;
         }
     }
