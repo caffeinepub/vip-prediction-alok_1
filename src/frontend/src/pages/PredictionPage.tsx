@@ -1,15 +1,14 @@
 import {
   Activity,
   AlertTriangle,
-  Brain,
-  Download,
+  Cpu,
   ExternalLink,
   Eye,
   History,
   LogOut,
   MessageCircle,
+  Plus,
   Shield,
-  Smartphone,
   Trophy,
   UserPlus,
   Users,
@@ -20,7 +19,6 @@ import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   useCurrentPeriodInfo,
-  useGetPrediction,
   useHeartbeat,
   useVisitorStats,
 } from "../hooks/useQueries";
@@ -30,33 +28,37 @@ interface PredictionPageProps {
   onLogout: () => void;
 }
 
-interface BettingHistoryEntry {
+interface ResultEntry {
   period: string;
+  num1: number;
+  num2: number;
+  sum: number;
+  resultDigit: number;
   result: "BIG" | "SMALL";
   timestamp: number;
 }
 
-const HISTORY_KEY = "vip_betting_history";
-const MAX_HISTORY = 10;
+const HISTORY_KEY = "vip_result_history";
+const MAX_HISTORY = 20;
 
-function loadHistory(): BettingHistoryEntry[] {
+function loadHistory(): ResultEntry[] {
   try {
     const raw = localStorage.getItem(HISTORY_KEY);
     if (!raw) return [];
-    return JSON.parse(raw) as BettingHistoryEntry[];
+    return JSON.parse(raw) as ResultEntry[];
   } catch {
     return [];
   }
 }
 
-function saveHistory(entries: BettingHistoryEntry[]): void {
+function saveHistory(entries: ResultEntry[]): void {
   try {
     localStorage.setItem(
       HISTORY_KEY,
       JSON.stringify(entries.slice(0, MAX_HISTORY)),
     );
   } catch {
-    // Storage not available — ignore
+    // ignore
   }
 }
 
@@ -64,76 +66,12 @@ function formatPeriodNumber(n: bigint): string {
   return n.toString().padStart(12, "0");
 }
 
-interface AnalysisData {
-  lastNumber: number;
-  lastResult: "BIG" | "SMALL";
-  streak: number;
-  streakType: "BIG" | "SMALL";
-  bigProb: number;
-  smallProb: number;
-  streakAlert: boolean;
-  aiPrediction: "BIG" | "SMALL";
-  aiConfidence: number;
-}
-
-function computeAnalysis(history: BettingHistoryEntry[]): AnalysisData | null {
-  if (history.length === 0) return null;
-
-  const results = history.map((h) => h.result);
-
-  // Streak
-  let streak = 1;
-  const streakType = results[0];
-  for (let i = 1; i < results.length; i++) {
-    if (results[i] === streakType) streak++;
-    else break;
-  }
-
-  // Probabilities from past data
-  const bigCount = results.filter((r) => r === "BIG").length;
-  const _smallCount = results.length - bigCount;
-  const bigProb = Math.round((bigCount / results.length) * 100);
-  const smallProb = 100 - bigProb;
-
-  // Simple number from period (last digit of period)
-  const lastPeriodStr = history[0].period;
-  const lastNumber = Number.parseInt(lastPeriodStr.slice(-1), 10);
-
-  // AI prediction logic: reversal after long streak, else follow probability
-  const streakAlert = streak >= 3;
-  let aiPrediction: "BIG" | "SMALL";
-  let aiConfidence: number;
-
-  if (streakAlert) {
-    // Suggest reversal
-    aiPrediction = streakType === "BIG" ? "SMALL" : "BIG";
-    aiConfidence = Math.min(55 + streak * 5, 85);
-  } else {
-    aiPrediction = bigProb >= smallProb ? "BIG" : "SMALL";
-    aiConfidence = Math.max(bigProb, smallProb);
-  }
-
-  return {
-    lastNumber,
-    lastResult: streakType,
-    streak,
-    streakType,
-    bigProb,
-    smallProb,
-    streakAlert,
-    aiPrediction,
-    aiConfidence,
-  };
-}
-
-function formatCountdown(seconds: bigint): string {
-  const secs = Number(seconds);
-  const m = Math.floor(secs / 60);
-  const s = secs % 60;
+function formatCountdown(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
   return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
 }
 
-// Generate a simple period number from timestamp
 function generatePeriodFromTime(): bigint {
   const now = new Date();
   const dateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
@@ -141,22 +79,79 @@ function generatePeriodFromTime(): bigint {
   return BigInt(`${dateStr}${String(minuteOfDay).padStart(4, "0")}`);
 }
 
+interface AnalysisData {
+  streak: number;
+  streakType: "BIG" | "SMALL";
+  bigProb: number;
+  smallProb: number;
+  streakAlert: boolean;
+  aiPrediction: "BIG" | "SMALL";
+  aiConfidence: number;
+  entryAllowed: boolean;
+}
+
+function computeAnalysis(history: ResultEntry[]): AnalysisData | null {
+  if (history.length < 3) return null;
+
+  const results = history.map((h) => h.result);
+
+  // Streak from most recent
+  let streak = 1;
+  const streakType = results[0];
+  for (let i = 1; i < results.length; i++) {
+    if (results[i] === streakType) streak++;
+    else break;
+  }
+
+  const bigCount = results.filter((r) => r === "BIG").length;
+  const bigProb = Math.round((bigCount / results.length) * 100);
+  const smallProb = 100 - bigProb;
+
+  const streakAlert = streak >= 3;
+  let aiPrediction: "BIG" | "SMALL";
+  let aiConfidence: number;
+
+  if (streak >= 4) {
+    // Strong reversal signal
+    aiPrediction = streakType === "BIG" ? "SMALL" : "BIG";
+    aiConfidence = Math.min(55 + streak * 6, 88);
+  } else if (streakAlert) {
+    aiPrediction = streakType === "BIG" ? "SMALL" : "BIG";
+    aiConfidence = Math.min(55 + streak * 5, 82);
+  } else {
+    aiPrediction = bigProb >= smallProb ? "BIG" : "SMALL";
+    aiConfidence = Math.max(bigProb, smallProb);
+  }
+
+  const entryAllowed = aiConfidence >= 60 && streak < 5;
+
+  return {
+    streak,
+    streakType,
+    bigProb,
+    smallProb,
+    streakAlert,
+    aiPrediction,
+    aiConfidence,
+    entryAllowed,
+  };
+}
+
 export default function PredictionPage({ onLogout }: PredictionPageProps) {
-  const captureRef = useRef<HTMLDivElement>(null);
-  const prevPeriodRef = useRef<bigint | null>(null);
-  const prevRevealRef = useRef(false);
   const [localSeconds, setLocalSeconds] = useState<number>(60);
   const [displayPeriod, setDisplayPeriod] = useState<bigint>(
     generatePeriodFromTime(),
   );
-  const [isRevealing, setIsRevealing] = useState(false);
-  const [revealKey, setRevealKey] = useState(0);
-  const [downloading, setDownloading] = useState(false);
-  const [bettingHistory, setBettingHistory] =
-    useState<BettingHistoryEntry[]>(loadHistory);
+
+  // The two single-digit inputs
+  const [num1, setNum1] = useState<string>("");
+  const [num2, setNum2] = useState<string>("");
+  const num2Ref = useRef<HTMLInputElement>(null);
+
+  const [resultHistory, setResultHistory] =
+    useState<ResultEntry[]>(loadHistory);
 
   const periodInfoQuery = useCurrentPeriodInfo();
-  const predictionQuery = useGetPrediction(displayPeriod);
   const visitorStatsQuery = useVisitorStats();
   const { mutate: sendHeartbeat } = useHeartbeat();
 
@@ -165,7 +160,6 @@ export default function PredictionPage({ onLogout }: PredictionPageProps) {
     if (periodInfoQuery.data) {
       const serverSecs = Number(periodInfoQuery.data.secondsRemaining);
       setLocalSeconds(serverSecs);
-
       const newPeriod = periodInfoQuery.data.periodNumber;
       if (newPeriod !== BigInt(0)) {
         setDisplayPeriod(newPeriod);
@@ -178,7 +172,6 @@ export default function PredictionPage({ onLogout }: PredictionPageProps) {
     const interval = setInterval(() => {
       setLocalSeconds((prev) => {
         if (prev <= 0) {
-          // Reset period
           setDisplayPeriod(generatePeriodFromTime());
           return 60;
         }
@@ -188,26 +181,7 @@ export default function PredictionPage({ onLogout }: PredictionPageProps) {
     return () => clearInterval(interval);
   }, []);
 
-  // Trigger reveal animation when prediction changes or time drops to 15
-  useEffect(() => {
-    if (localSeconds <= 15 && !isRevealing) {
-      setIsRevealing(true);
-      setRevealKey((k) => k + 1);
-    } else if (localSeconds > 15) {
-      setIsRevealing(false);
-    }
-  }, [localSeconds, isRevealing]);
-
-  // Detect period change
-  useEffect(() => {
-    const current = displayPeriod;
-    if (prevPeriodRef.current !== null && prevPeriodRef.current !== current) {
-      setIsRevealing(false);
-    }
-    prevPeriodRef.current = current;
-  }, [displayPeriod]);
-
-  // Heartbeat — mark user as online every 3 minutes
+  // Heartbeat every 3 minutes
   useEffect(() => {
     sendHeartbeat();
     const interval = setInterval(
@@ -223,135 +197,73 @@ export default function PredictionPage({ onLogout }: PredictionPageProps) {
     ? Number(periodInfoQuery.data.secondsRemaining)
     : localSeconds;
 
-  const shouldReveal = seconds <= 15;
-  const prediction = predictionQuery.data?.result || null;
-  const isBig = prediction === "BIG";
-  const isUrgent = seconds <= 5;
-  const isLoading = periodInfoQuery.isLoading && !periodInfoQuery.data;
+  const isUrgent = seconds <= 10;
 
-  // Save to betting history when prediction is revealed
-  useEffect(() => {
-    const justRevealed = shouldReveal && !prevRevealRef.current;
-    prevRevealRef.current = shouldReveal;
+  // Derived calculation
+  const n1 = num1 !== "" ? Number.parseInt(num1, 10) : null;
+  const n2 = num2 !== "" ? Number.parseInt(num2, 10) : null;
+  const bothEntered = n1 !== null && n2 !== null;
+  const sumVal = bothEntered ? n1 + n2 : null;
+  const resultDigit = sumVal !== null ? sumVal % 10 : null;
+  const resultLabel: "BIG" | "SMALL" | null =
+    resultDigit !== null ? (resultDigit >= 5 ? "BIG" : "SMALL") : null;
+  const isBig = resultLabel === "BIG";
 
-    if (justRevealed && prediction !== null) {
-      const entry: BettingHistoryEntry = {
-        period: formatPeriodNumber(displayPeriod),
-        result: prediction as "BIG" | "SMALL",
-        timestamp: Date.now(),
-      };
-      setBettingHistory((prev) => {
-        const updated = [entry, ...prev].slice(0, MAX_HISTORY);
-        saveHistory(updated);
-        return updated;
-      });
-    }
-  }, [shouldReveal, prediction, displayPeriod]);
+  const analysis = computeAnalysis(resultHistory);
 
   const handleLogout = useCallback(() => {
     clearSession();
     onLogout();
   }, [onLogout]);
 
-  const handleDownload = useCallback(async () => {
-    if (!captureRef.current || downloading) return;
-    setDownloading(true);
-    try {
-      const card = captureRef.current;
-      const canvas = document.createElement("canvas");
-      const scale = window.devicePixelRatio || 2;
-      const rect = card.getBoundingClientRect();
-      canvas.width = rect.width * scale;
-      canvas.height = rect.height * scale;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-
-      ctx.scale(scale, scale);
-
-      // Draw background
-      ctx.fillStyle = "#050510";
-      ctx.fillRect(0, 0, rect.width, rect.height);
-
-      // Draw grid lines
-      ctx.strokeStyle = "rgba(100,255,150,0.05)";
-      ctx.lineWidth = 0.5;
-      for (let x = 0; x < rect.width; x += 40) {
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, rect.height);
-        ctx.stroke();
-      }
-      for (let y = 0; y < rect.height; y += 40) {
-        ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(rect.width, y);
-        ctx.stroke();
-      }
-
-      // Draw card background
-      ctx.fillStyle = "#0a0a1a";
-      ctx.roundRect(20, 20, rect.width - 40, rect.height - 40, 8);
-      ctx.fill();
-
-      // Draw border
-      ctx.strokeStyle = "rgba(100,255,150,0.4)";
-      ctx.lineWidth = 1;
-      ctx.roundRect(20, 20, rect.width - 40, rect.height - 40, 8);
-      ctx.stroke();
-
-      // Title
-      ctx.font = "bold 22px 'Geist Mono', monospace";
-      ctx.fillStyle = "#64ff96";
-      ctx.textAlign = "center";
-      ctx.shadowColor = "#64ff96";
-      ctx.shadowBlur = 15;
-      ctx.fillText("VIP PREDICTION ALOK", rect.width / 2, 75);
-
-      // Period
-      ctx.font = "12px 'Geist Mono', monospace";
-      ctx.fillStyle = "#4a9abb";
-      ctx.shadowColor = "#4a9abb";
-      ctx.shadowBlur = 8;
-      ctx.fillText(
-        `PERIOD: ${formatPeriodNumber(displayPeriod)}`,
-        rect.width / 2,
-        105,
-      );
-
-      // Prediction result
-      const result = predictionQuery.data?.result || "---";
-      const resultIsBig = result === "BIG";
-      ctx.font = "bold 72px 'Geist Mono', monospace";
-      ctx.fillStyle = resultIsBig ? "#4ade80" : "#f87171";
-      ctx.shadowColor = resultIsBig ? "#4ade80" : "#f87171";
-      ctx.shadowBlur = 40;
-      ctx.fillText(result, rect.width / 2, 200);
-
-      // Timestamp
-      ctx.font = "10px 'Geist Mono', monospace";
-      ctx.fillStyle = "#334466";
-      ctx.shadowBlur = 0;
-      ctx.fillText(
-        new Date().toLocaleString(),
-        rect.width / 2,
-        rect.height - 35,
-      );
-
-      // Download
-      const link = document.createElement("a");
-      link.download = `vip-prediction-${formatPeriodNumber(displayPeriod)}.png`;
-      link.href = canvas.toDataURL("image/png");
-      link.click();
-    } catch (err) {
-      console.error("Download failed", err);
-    } finally {
-      setDownloading(false);
+  // Auto-advance to second input
+  const handleNum1Change = (val: string) => {
+    const clean = val.replace(/\D/g, "").slice(0, 1);
+    setNum1(clean);
+    if (clean.length === 1 && num2Ref.current) {
+      num2Ref.current.focus();
     }
-  }, [displayPeriod, predictionQuery.data, downloading]);
+  };
+
+  const handleNum2Change = (val: string) => {
+    const clean = val.replace(/\D/g, "").slice(0, 1);
+    setNum2(clean);
+  };
+
+  // Add result to history
+  const handleAddResult = useCallback(() => {
+    if (!bothEntered || resultDigit === null || resultLabel === null) return;
+    const entry: ResultEntry = {
+      period: formatPeriodNumber(displayPeriod),
+      num1: n1!,
+      num2: n2!,
+      sum: sumVal!,
+      resultDigit,
+      result: resultLabel,
+      timestamp: Date.now(),
+    };
+    setResultHistory((prev) => {
+      const updated = [entry, ...prev].slice(0, MAX_HISTORY);
+      saveHistory(updated);
+      return updated;
+    });
+    // Clear inputs after adding
+    setNum1("");
+    setNum2("");
+  }, [bothEntered, resultDigit, resultLabel, displayPeriod, n1, n2, sumVal]);
+
+  const handleClearHistory = () => {
+    setResultHistory([]);
+    try {
+      localStorage.removeItem(HISTORY_KEY);
+    } catch {
+      // ignore
+    }
+  };
 
   return (
     <div className="cyber-bg min-h-screen flex flex-col relative">
-      {/* Decorative ambient blobs */}
+      {/* Ambient blobs */}
       <div
         className="fixed top-0 left-0 w-96 h-96 rounded-full pointer-events-none"
         style={{
@@ -378,7 +290,7 @@ export default function PredictionPage({ onLogout }: PredictionPageProps) {
           backdropFilter: "blur(10px)",
         }}
       >
-        {/* Top row: brand + actions */}
+        {/* Top row */}
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">
             <Zap className="w-5 h-5 neon-green shrink-0" />
@@ -391,7 +303,6 @@ export default function PredictionPage({ onLogout }: PredictionPageProps) {
           </div>
 
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-            {/* Connection status */}
             <div
               className="hidden sm:flex items-center gap-1.5 px-2 py-1 rounded text-xs"
               style={{ background: "oklch(0.12 0.02 200)" }}
@@ -411,29 +322,11 @@ export default function PredictionPage({ onLogout }: PredictionPageProps) {
               </span>
             </div>
 
-            {/* APK Download button */}
-            <a
-              href="#apk-download"
-              className="flex items-center gap-1 px-2 sm:px-3 py-1.5 rounded text-xs font-bold tracking-wider transition-all hover:scale-105"
-              style={{
-                background: "oklch(0.13 0.025 140)",
-                border: "1px solid oklch(0.72 0.22 140 / 0.5)",
-                color: "oklch(0.78 0.22 140)",
-                fontFamily: '"Geist Mono", monospace',
-                boxShadow: "0 0 8px oklch(0.72 0.22 140 / 0.2)",
-                textDecoration: "none",
-              }}
-            >
-              <Smartphone className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">APK</span>
-              <Download className="w-3 h-3" />
-            </a>
-
-            {/* Register button */}
             <a
               href="https://www.hyderabad91.com/#/register?invitationCode=4841620269921"
               target="_blank"
               rel="noopener noreferrer"
+              data-ocid="header.register.link"
               className="flex items-center gap-1 px-2 sm:px-3 py-1.5 rounded text-xs font-bold tracking-wider transition-all hover:scale-105"
               style={{
                 background:
@@ -448,10 +341,10 @@ export default function PredictionPage({ onLogout }: PredictionPageProps) {
               <span className="hidden sm:inline">REGISTER</span>
             </a>
 
-            {/* Logout */}
             <button
               type="button"
               onClick={handleLogout}
+              data-ocid="header.logout.button"
               className="flex items-center gap-1.5 px-2 sm:px-3 py-1.5 rounded text-xs transition-all hover:scale-105"
               style={{
                 background: "oklch(0.15 0.03 22)",
@@ -467,7 +360,7 @@ export default function PredictionPage({ onLogout }: PredictionPageProps) {
           </div>
         </div>
 
-        {/* Tagline marquee row */}
+        {/* Marquee */}
         <div
           className="mt-1.5 overflow-hidden rounded"
           style={{
@@ -482,17 +375,14 @@ export default function PredictionPage({ onLogout }: PredictionPageProps) {
               fontFamily: '"Geist Mono", monospace',
             }}
           >
-            🎯 WINGO 1-MIN RESULT TRACKING Analysis &nbsp;|&nbsp; DIRECT
-            ANSWER:100% SURESHOT &nbsp;|&nbsp; Big - Small prediction
-            &nbsp;|&nbsp; 🎯 WINGO 1-MIN RESULT TRACKING Analysis &nbsp;|&nbsp;
-            DIRECT ANSWER:100% SURESHOT &nbsp;|&nbsp; Big - Small prediction
-            &nbsp;|&nbsp; 🎯 WINGO 1-MIN RESULT TRACKING Analysis &nbsp;|&nbsp;
-            DIRECT ANSWER:100% SURESHOT &nbsp;|&nbsp; Big - Small prediction
-            &nbsp;|&nbsp;
+            🎯 WINGO 1-MIN RESULT TRACKING Analysis &nbsp;|&nbsp; DIRECT ANSWER:
+            100% SURESHOT &nbsp;|&nbsp; Big - Small prediction &nbsp;|&nbsp; 🎯
+            WINGO 1-MIN RESULT TRACKING Analysis &nbsp;|&nbsp; DIRECT ANSWER:
+            100% SURESHOT &nbsp;|&nbsp; Big - Small prediction &nbsp;|&nbsp;
           </div>
         </div>
 
-        {/* Visitor stats bar */}
+        {/* Visitor stats */}
         <div
           className="mt-1.5 flex items-center justify-start gap-0 rounded overflow-hidden"
           style={{
@@ -527,7 +417,6 @@ export default function PredictionPage({ onLogout }: PredictionPageProps) {
             </span>
           </div>
 
-          {/* Divider */}
           <div
             className="w-px self-stretch"
             style={{ background: "oklch(0.82 0.22 142 / 0.12)" }}
@@ -574,9 +463,12 @@ export default function PredictionPage({ onLogout }: PredictionPageProps) {
       </header>
 
       {/* ─── Main Content ─── */}
-      <main className="flex-1 flex flex-col items-start justify-start pl-4 sm:pl-6 pr-4 sm:pr-6 py-6 relative z-10">
-        <div
-          ref={captureRef}
+      <main className="flex-1 flex flex-col items-start justify-start px-4 sm:px-6 py-5 relative z-10 gap-5">
+        {/* ─── WinGo Timer Card ─── */}
+        <motion.div
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5 }}
           className="w-full max-w-lg circuit-border rounded-xl overflow-hidden"
           style={{
             background:
@@ -620,7 +512,7 @@ export default function PredictionPage({ onLogout }: PredictionPageProps) {
 
           {/* Period Number */}
           <div
-            className="px-5 pt-5 pb-4 scan-line-container"
+            className="px-5 pt-4 pb-3"
             style={{ borderBottom: "1px solid oklch(0.82 0.22 142 / 0.08)" }}
           >
             <p
@@ -632,31 +524,19 @@ export default function PredictionPage({ onLogout }: PredictionPageProps) {
             >
               PERIOD NUMBER
             </p>
-            <div className="flex items-baseline gap-2">
-              {isLoading ? (
-                <div
-                  className="h-8 w-full rounded animate-pulse"
-                  style={{ background: "oklch(0.15 0.02 240)" }}
-                />
-              ) : (
-                <motion.p
-                  key={displayPeriod.toString()}
-                  initial={{ opacity: 0, x: -10 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  className="text-xl sm:text-2xl font-bold tracking-widest neon-blue"
-                  style={{ fontFamily: '"Geist Mono", monospace' }}
-                >
-                  {formatPeriodNumber(displayPeriod)}
-                </motion.p>
-              )}
-            </div>
+            <motion.p
+              key={displayPeriod.toString()}
+              initial={{ opacity: 0, x: -10 }}
+              animate={{ opacity: 1, x: 0 }}
+              className="text-xl sm:text-2xl font-bold tracking-widest neon-blue"
+              style={{ fontFamily: '"Geist Mono", monospace' }}
+            >
+              {formatPeriodNumber(displayPeriod)}
+            </motion.p>
           </div>
 
-          {/* ─── Countdown Timer ─── */}
-          <div
-            className="px-5 py-5"
-            style={{ borderBottom: "1px solid oklch(0.82 0.22 142 / 0.08)" }}
-          >
+          {/* Countdown Timer */}
+          <div className="px-5 py-4">
             <p
               className="text-xs tracking-widest mb-2"
               style={{
@@ -667,23 +547,20 @@ export default function PredictionPage({ onLogout }: PredictionPageProps) {
               TIME REMAINING
             </p>
             <div className="flex items-center gap-4">
-              <motion.div
-                key={`timer-${Math.floor(seconds / 10)}`}
+              <div
                 className={`text-5xl sm:text-6xl font-bold tracking-widest ${
-                  isUrgent ? "urgent-flash" : ""
-                } ${seconds <= 15 ? "neon-red" : "neon-green"}`}
+                  isUrgent ? "urgent-flash neon-red" : "neon-green"
+                }`}
                 style={{ fontFamily: '"Geist Mono", monospace' }}
               >
-                {formatCountdown(BigInt(seconds))}
-              </motion.div>
-
-              {/* Progress bar */}
+                {formatCountdown(seconds)}
+              </div>
               <div className="flex-1">
                 <div
                   className="h-2 rounded-full overflow-hidden"
                   style={{ background: "oklch(0.12 0.02 240)" }}
                 >
-                  <motion.div
+                  <div
                     className="h-full rounded-full transition-all"
                     style={{
                       width: `${(seconds / 60) * 100}%`,
@@ -706,521 +583,751 @@ export default function PredictionPage({ onLogout }: PredictionPageProps) {
                     fontFamily: '"Geist Mono", monospace',
                   }}
                 >
-                  {seconds <= 15 ? "⚡ REVEALING SOON" : "ANALYZING GAME DATA"}
+                  {seconds <= 15 ? "⚡ NEXT PERIOD SOON" : "PERIOD RUNNING"}
                 </p>
               </div>
             </div>
           </div>
+        </motion.div>
 
-          {/* ─── Prediction Result ─── */}
-          <div className="px-5 py-6 text-center">
-            <p
-              className="text-xs tracking-widest mb-4"
-              style={{
-                color: "oklch(0.4 0.05 200)",
-                fontFamily: '"Geist Mono", monospace',
-              }}
-            >
-              PREDICTION RESULT
-            </p>
-
-            <AnimatePresence mode="wait">
-              {!shouldReveal ? (
-                /* Analyzing state */
-                <motion.div
-                  key="analyzing"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  className="py-8"
-                >
-                  <div className="analyzing-dots mb-4">
-                    <span className="dot-pulse-1" />
-                    <span className="dot-pulse-2" />
-                    <span className="dot-pulse-3" />
-                  </div>
-                  <p
-                    className="text-lg tracking-widest neon-blue"
-                    style={{ fontFamily: '"Geist Mono", monospace' }}
-                  >
-                    ANALYZING...
-                  </p>
-                  <p
-                    className="text-xs mt-2"
-                    style={{
-                      color: "oklch(0.35 0.04 200)",
-                      fontFamily: '"Geist Mono", monospace',
-                    }}
-                  >
-                    RESULT IN {seconds}s
-                  </p>
-                </motion.div>
-              ) : (
-                /* Reveal state */
-                <motion.div
-                  key={`reveal-${revealKey}`}
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  className="py-4"
-                >
-                  {predictionQuery.isLoading ? (
-                    <div className="py-8">
-                      <div className="analyzing-dots mb-4">
-                        <span className="dot-pulse-1" />
-                        <span className="dot-pulse-2" />
-                        <span className="dot-pulse-3" />
-                      </div>
-                    </div>
-                  ) : (
-                    <>
-                      {/* Glowing ring around result */}
-                      <div className="relative inline-block">
-                        <div
-                          className={`absolute inset-0 rounded-full ${isBig ? "glow-green" : "glow-red"}`}
-                          style={{
-                            transform: "scale(1.4)",
-                            filter: "blur(20px)",
-                            opacity: 0.6,
-                          }}
-                        />
-                        <motion.p
-                          key={prediction || "loading"}
-                          className={`big-reveal text-6xl sm:text-8xl font-bold tracking-wider relative ${
-                            isBig
-                              ? "neon-green pulse-glow-green"
-                              : "neon-red pulse-glow-red"
-                          }`}
-                          style={{
-                            fontFamily: '"Geist Mono", monospace',
-                            letterSpacing: "0.05em",
-                          }}
-                        >
-                          {prediction || "---"}
-                        </motion.p>
-                      </div>
-
-                      {/* Sub-label */}
-                      <div className="mt-3 flex items-center justify-center gap-2">
-                        <div
-                          className="w-1.5 h-1.5 rounded-full"
-                          style={{
-                            background: isBig
-                              ? "oklch(0.82 0.22 142)"
-                              : "oklch(0.65 0.28 22)",
-                            boxShadow: isBig
-                              ? "0 0 6px oklch(0.82 0.22 142)"
-                              : "0 0 6px oklch(0.65 0.28 22)",
-                          }}
-                        />
-                        <span
-                          className="text-sm tracking-widest font-semibold"
-                          style={{
-                            color: isBig
-                              ? "oklch(0.82 0.22 142)"
-                              : "oklch(0.65 0.28 22)",
-                            fontFamily: '"Geist Mono", monospace',
-                          }}
-                        >
-                          100% SURESHOT
-                        </span>
-                        <div
-                          className="w-1.5 h-1.5 rounded-full"
-                          style={{
-                            background: isBig
-                              ? "oklch(0.82 0.22 142)"
-                              : "oklch(0.65 0.28 22)",
-                            boxShadow: isBig
-                              ? "0 0 6px oklch(0.82 0.22 142)"
-                              : "0 0 6px oklch(0.65 0.28 22)",
-                          }}
-                        />
-                      </div>
-                    </>
-                  )}
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
-
-          {/* Download button */}
-          <div
-            className="px-5 pb-5 pt-2"
-            style={{ borderTop: "1px solid oklch(0.82 0.22 142 / 0.08)" }}
-          >
-            <button
-              type="button"
-              onClick={handleDownload}
-              disabled={downloading || !prediction}
-              className="w-full flex items-center justify-center gap-2 py-3 rounded text-xs font-bold tracking-widest transition-all hover:scale-[1.01] disabled:opacity-40 disabled:cursor-not-allowed"
-              style={{
-                background: "oklch(0.1 0.015 240)",
-                border: "1px solid oklch(0.72 0.2 200 / 0.4)",
-                color: "oklch(0.72 0.2 200)",
-                fontFamily: '"Geist Mono", monospace',
-                boxShadow: "0 0 10px oklch(0.72 0.2 200 / 0.1)",
-              }}
-            >
-              <Download className="w-3.5 h-3.5" />
-              {downloading ? "DOWNLOADING..." : "DOWNLOAD PREDICTION"}
-            </button>
-          </div>
-        </div>
-
-        {/* Stats row */}
+        {/* ─── 2-Number Input Section ─── */}
         <motion.div
-          initial={{ opacity: 0, y: 20 }}
+          initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.5 }}
-          className="mt-6 w-full max-w-lg grid grid-cols-3 gap-3"
+          transition={{ duration: 0.5, delay: 0.1 }}
+          className="w-full max-w-lg"
         >
-          {[
-            { label: "ACCURACY", value: "100%", color: "neon-green" },
-            { label: "SERVER", value: "LIVE", color: "neon-blue" },
-            { label: "MODE", value: "VIP", color: "neon-pink" },
-          ].map((stat) => (
+          <div
+            className="circuit-border rounded-xl overflow-hidden"
+            style={{
+              background:
+                "linear-gradient(160deg, oklch(0.09 0.015 220), oklch(0.07 0.01 230))",
+              boxShadow:
+                "0 0 25px oklch(0.78 0.22 200 / 0.1), 0 0 50px oklch(0.78 0.22 200 / 0.05)",
+              borderColor: "oklch(0.72 0.2 200 / 0.3)",
+            }}
+          >
+            {/* Section header */}
             <div
-              key={stat.label}
-              className="text-center py-3 px-2 rounded"
+              className="px-5 py-3 flex items-center justify-between"
               style={{
-                background: "oklch(0.09 0.012 240)",
-                border: "1px solid oklch(0.82 0.22 142 / 0.1)",
+                background: "oklch(0.1 0.018 220)",
+                borderBottom: "1px solid oklch(0.72 0.2 200 / 0.2)",
               }}
             >
-              <p
-                className={`text-lg font-bold ${stat.color}`}
-                style={{ fontFamily: '"Geist Mono", monospace' }}
-              >
-                {stat.value}
-              </p>
-              <p
-                className="text-xs mt-0.5"
+              <div className="flex items-center gap-2">
+                <Plus
+                  className="w-4 h-4"
+                  style={{ color: "oklch(0.78 0.22 200)" }}
+                />
+                <span
+                  className="text-xs tracking-widest font-bold"
+                  style={{
+                    color: "oklch(0.78 0.22 200)",
+                    fontFamily: '"Geist Mono", monospace',
+                  }}
+                >
+                  ENTER LAST 2 NUMBERS
+                </span>
+              </div>
+              <span
+                className="text-xs tracking-wider"
                 style={{
-                  color: "oklch(0.35 0.04 200)",
+                  color: "oklch(0.45 0.06 200)",
                   fontFamily: '"Geist Mono", monospace',
                 }}
               >
-                {stat.label}
-              </p>
+                0–9 CALC
+              </span>
             </div>
-          ))}
-        </motion.div>
 
-        {/* ─── Nano AI Analysis Panel ─── */}
-        {(() => {
-          const analysis = computeAnalysis(bettingHistory);
-          if (!analysis) return null;
-          return (
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.6 }}
-              className="mt-6 w-full max-w-lg"
-            >
-              <div
-                className="circuit-border rounded-xl overflow-hidden"
-                style={{
-                  background:
-                    "linear-gradient(160deg, oklch(0.09 0.014 270), oklch(0.07 0.01 260))",
-                  boxShadow:
-                    "0 0 30px oklch(0.68 0.28 290 / 0.1), 0 0 60px oklch(0.68 0.28 290 / 0.05)",
-                  borderColor: "oklch(0.68 0.28 290 / 0.3)",
-                }}
-              >
-                {/* Panel header */}
-                <div
-                  className="px-5 py-3 flex items-center justify-between"
-                  style={{
-                    background: "oklch(0.1 0.018 270)",
-                    borderBottom: "1px solid oklch(0.68 0.28 290 / 0.2)",
-                  }}
-                >
-                  <div className="flex items-center gap-2">
-                    <Brain
-                      className="w-4 h-4"
-                      style={{ color: "oklch(0.78 0.22 290)" }}
-                    />
-                    <span
-                      className="text-xs tracking-widest font-bold"
-                      style={{
-                        color: "oklch(0.78 0.22 290)",
-                        fontFamily: '"Geist Mono", monospace',
-                      }}
-                    >
-                      NANO AI ANALYSIS
-                    </span>
-                  </div>
-                  <Activity
-                    className="w-3.5 h-3.5"
-                    style={{ color: "oklch(0.68 0.28 290 / 0.6)" }}
+            <div className="px-5 py-5 space-y-5">
+              {/* Two single-digit inputs side by side */}
+              <div className="flex items-end gap-4">
+                {/* Last Number 1 */}
+                <div className="flex-1">
+                  <label
+                    htmlFor="input-num1"
+                    className="block text-xs tracking-widest mb-2 font-bold"
+                    style={{
+                      color: "oklch(0.72 0.2 200)",
+                      fontFamily: '"Geist Mono", monospace',
+                    }}
+                  >
+                    LAST NUMBER 1
+                  </label>
+                  <input
+                    id="input-num1"
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={1}
+                    value={num1}
+                    data-ocid="calc.input.1"
+                    onChange={(e) => handleNum1Change(e.target.value)}
+                    placeholder="0-9"
+                    className="w-full px-3 py-4 rounded-lg text-center text-3xl font-bold tracking-widest outline-none transition-all"
+                    style={{
+                      background: "oklch(0.08 0.012 220)",
+                      border: num1
+                        ? "2px solid oklch(0.72 0.2 200 / 0.8)"
+                        : "2px solid oklch(0.72 0.2 200 / 0.3)",
+                      color: "oklch(0.88 0.18 200)",
+                      fontFamily: '"Geist Mono", monospace',
+                      boxShadow: num1
+                        ? "0 0 12px oklch(0.72 0.2 200 / 0.3), inset 0 0 8px oklch(0.72 0.2 200 / 0.05)"
+                        : "none",
+                    }}
+                    onFocus={(e) => {
+                      e.currentTarget.style.border =
+                        "2px solid oklch(0.72 0.2 200 / 0.9)";
+                      e.currentTarget.style.boxShadow =
+                        "0 0 16px oklch(0.72 0.2 200 / 0.4)";
+                    }}
+                    onBlur={(e) => {
+                      e.currentTarget.style.border = num1
+                        ? "2px solid oklch(0.72 0.2 200 / 0.8)"
+                        : "2px solid oklch(0.72 0.2 200 / 0.3)";
+                      e.currentTarget.style.boxShadow = num1
+                        ? "0 0 12px oklch(0.72 0.2 200 / 0.3)"
+                        : "none";
+                    }}
                   />
                 </div>
 
-                <div className="px-5 py-4 space-y-3">
-                  {/* Stats grid */}
-                  <div className="grid grid-cols-2 gap-3">
-                    {/* Last Number */}
-                    <div
-                      className="px-3 py-2.5 rounded"
-                      style={{
-                        background: "oklch(0.085 0.012 240)",
-                        border: "1px solid oklch(0.68 0.28 290 / 0.15)",
-                      }}
-                    >
-                      <p
-                        className="text-xs tracking-wider mb-1"
-                        style={{
-                          color: "oklch(0.4 0.05 200)",
-                          fontFamily: '"Geist Mono", monospace',
-                        }}
-                      >
-                        🎯 LAST NUMBER
-                      </p>
-                      <p
-                        className="text-2xl font-bold"
-                        style={{
-                          color: "oklch(0.88 0.18 60)",
-                          fontFamily: '"Geist Mono", monospace',
-                          textShadow: "0 0 10px oklch(0.88 0.18 60 / 0.5)",
-                        }}
-                      >
-                        {analysis.lastNumber}
-                      </p>
-                    </div>
+                {/* Plus symbol */}
+                <div
+                  className="flex items-center justify-center w-10 h-12 rounded-lg shrink-0 mb-0.5"
+                  style={{
+                    color: "oklch(0.6 0.08 200)",
+                    fontFamily: '"Geist Mono", monospace',
+                    fontSize: "1.5rem",
+                    fontWeight: "bold",
+                  }}
+                >
+                  +
+                </div>
 
-                    {/* Result */}
-                    <div
-                      className="px-3 py-2.5 rounded"
-                      style={{
-                        background: "oklch(0.085 0.012 240)",
-                        border: "1px solid oklch(0.68 0.28 290 / 0.15)",
-                      }}
-                    >
-                      <p
-                        className="text-xs tracking-wider mb-1"
-                        style={{
-                          color: "oklch(0.4 0.05 200)",
-                          fontFamily: '"Geist Mono", monospace',
-                        }}
-                      >
-                        📊 RESULT
-                      </p>
-                      <p
-                        className="text-xl font-bold"
-                        style={{
-                          color:
-                            analysis.lastResult === "BIG"
-                              ? "oklch(0.82 0.22 142)"
-                              : "oklch(0.65 0.28 22)",
-                          fontFamily: '"Geist Mono", monospace',
-                          textShadow:
-                            analysis.lastResult === "BIG"
-                              ? "0 0 10px oklch(0.82 0.22 142 / 0.6)"
-                              : "0 0 10px oklch(0.65 0.28 22 / 0.6)",
-                        }}
-                      >
-                        {analysis.lastResult}
-                      </p>
-                    </div>
-
-                    {/* Streak */}
-                    <div
-                      className="px-3 py-2.5 rounded"
-                      style={{
-                        background: "oklch(0.085 0.012 240)",
-                        border: `1px solid ${analysis.streakAlert ? "oklch(0.88 0.22 60 / 0.4)" : "oklch(0.68 0.28 290 / 0.15)"}`,
-                      }}
-                    >
-                      <p
-                        className="text-xs tracking-wider mb-1"
-                        style={{
-                          color: "oklch(0.4 0.05 200)",
-                          fontFamily: '"Geist Mono", monospace',
-                        }}
-                      >
-                        🔥 STREAK
-                      </p>
-                      <p
-                        className="text-xl font-bold"
-                        style={{
-                          color: analysis.streakAlert
-                            ? "oklch(0.88 0.22 60)"
-                            : "oklch(0.78 0.22 290)",
-                          fontFamily: '"Geist Mono", monospace',
-                        }}
-                      >
-                        {analysis.streak}{" "}
-                        <span className="text-sm">{analysis.streakType}</span>
-                      </p>
-                    </div>
-
-                    {/* AI Prediction */}
-                    <div
-                      className="px-3 py-2.5 rounded"
-                      style={{
-                        background:
-                          analysis.aiPrediction === "BIG"
-                            ? "oklch(0.1 0.025 142 / 0.5)"
-                            : "oklch(0.1 0.025 22 / 0.5)",
-                        border: `1px solid ${analysis.aiPrediction === "BIG" ? "oklch(0.82 0.22 142 / 0.35)" : "oklch(0.65 0.28 22 / 0.35)"}`,
-                      }}
-                    >
-                      <p
-                        className="text-xs tracking-wider mb-1"
-                        style={{
-                          color: "oklch(0.4 0.05 200)",
-                          fontFamily: '"Geist Mono", monospace',
-                        }}
-                      >
-                        🤖 AI NEXT
-                      </p>
-                      <p
-                        className="text-xl font-bold"
-                        style={{
-                          color:
-                            analysis.aiPrediction === "BIG"
-                              ? "oklch(0.82 0.22 142)"
-                              : "oklch(0.65 0.28 22)",
-                          fontFamily: '"Geist Mono", monospace',
-                        }}
-                      >
-                        {analysis.aiPrediction}
-                        <span
-                          className="text-xs ml-1"
-                          style={{ color: "oklch(0.5 0.06 200)" }}
-                        >
-                          {analysis.aiConfidence}%
-                        </span>
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Probability bars */}
-                  <div
-                    className="px-3 py-3 rounded space-y-2"
+                {/* Last Number 2 */}
+                <div className="flex-1">
+                  <label
+                    htmlFor="input-num2"
+                    className="block text-xs tracking-widest mb-2 font-bold"
                     style={{
-                      background: "oklch(0.085 0.012 240)",
-                      border: "1px solid oklch(0.68 0.28 290 / 0.12)",
+                      color: "oklch(0.78 0.22 200)",
+                      fontFamily: '"Geist Mono", monospace',
                     }}
                   >
-                    {/* BIG bar */}
-                    <div>
-                      <div className="flex justify-between mb-1">
-                        <span
-                          className="text-xs tracking-wider"
-                          style={{
-                            color: "oklch(0.82 0.22 142)",
-                            fontFamily: '"Geist Mono", monospace',
-                          }}
-                        >
-                          📈 BIG
-                        </span>
-                        <span
-                          className="text-xs font-bold"
-                          style={{
-                            color: "oklch(0.82 0.22 142)",
-                            fontFamily: '"Geist Mono", monospace',
-                          }}
-                        >
-                          {analysis.bigProb}%
-                        </span>
-                      </div>
-                      <div
-                        className="h-2 rounded-full overflow-hidden"
-                        style={{ background: "oklch(0.12 0.02 240)" }}
-                      >
-                        <motion.div
-                          initial={{ width: 0 }}
-                          animate={{ width: `${analysis.bigProb}%` }}
-                          transition={{ duration: 0.8, ease: "easeOut" }}
-                          className="h-full rounded-full"
-                          style={{
-                            background: "oklch(0.82 0.22 142)",
-                            boxShadow: "0 0 6px oklch(0.82 0.22 142 / 0.5)",
-                          }}
-                        />
-                      </div>
-                    </div>
+                    LAST NUMBER 2
+                  </label>
+                  <input
+                    id="input-num2"
+                    ref={num2Ref}
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={1}
+                    value={num2}
+                    data-ocid="calc.input.2"
+                    onChange={(e) => handleNum2Change(e.target.value)}
+                    placeholder="0-9"
+                    className="w-full px-3 py-4 rounded-lg text-center text-3xl font-bold tracking-widest outline-none transition-all"
+                    style={{
+                      background: "oklch(0.08 0.012 220)",
+                      border: num2
+                        ? "2px solid oklch(0.78 0.22 200 / 0.8)"
+                        : "2px solid oklch(0.78 0.22 200 / 0.3)",
+                      color: "oklch(0.88 0.18 200)",
+                      fontFamily: '"Geist Mono", monospace',
+                      boxShadow: num2
+                        ? "0 0 12px oklch(0.78 0.22 200 / 0.3), inset 0 0 8px oklch(0.78 0.22 200 / 0.05)"
+                        : "none",
+                    }}
+                    onFocus={(e) => {
+                      e.currentTarget.style.border =
+                        "2px solid oklch(0.78 0.22 200 / 0.9)";
+                      e.currentTarget.style.boxShadow =
+                        "0 0 16px oklch(0.78 0.22 200 / 0.4)";
+                    }}
+                    onBlur={(e) => {
+                      e.currentTarget.style.border = num2
+                        ? "2px solid oklch(0.78 0.22 200 / 0.8)"
+                        : "2px solid oklch(0.78 0.22 200 / 0.3)";
+                      e.currentTarget.style.boxShadow = num2
+                        ? "0 0 12px oklch(0.78 0.22 200 / 0.3)"
+                        : "none";
+                    }}
+                  />
+                </div>
+              </div>
 
-                    {/* SMALL bar */}
-                    <div>
-                      <div className="flex justify-between mb-1">
-                        <span
-                          className="text-xs tracking-wider"
-                          style={{
-                            color: "oklch(0.65 0.28 22)",
-                            fontFamily: '"Geist Mono", monospace',
-                          }}
-                        >
-                          📉 SMALL
-                        </span>
-                        <span
-                          className="text-xs font-bold"
-                          style={{
-                            color: "oklch(0.65 0.28 22)",
-                            fontFamily: '"Geist Mono", monospace',
-                          }}
-                        >
-                          {analysis.smallProb}%
-                        </span>
-                      </div>
-                      <div
-                        className="h-2 rounded-full overflow-hidden"
-                        style={{ background: "oklch(0.12 0.02 240)" }}
-                      >
-                        <motion.div
-                          initial={{ width: 0 }}
-                          animate={{ width: `${analysis.smallProb}%` }}
-                          transition={{ duration: 0.8, ease: "easeOut" }}
-                          className="h-full rounded-full"
-                          style={{
-                            background: "oklch(0.65 0.28 22)",
-                            boxShadow: "0 0 6px oklch(0.65 0.28 22 / 0.5)",
-                          }}
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Streak Alert */}
-                  {analysis.streakAlert && (
-                    <motion.div
-                      initial={{ opacity: 0, scale: 0.95 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      className="flex items-center gap-2 px-3 py-2.5 rounded"
+              {/* Calculation Result Display */}
+              <AnimatePresence mode="wait">
+                {bothEntered && resultDigit !== null && resultLabel !== null ? (
+                  <motion.div
+                    key={`result-${num1}-${num2}`}
+                    initial={{ opacity: 0, y: -8, scale: 0.97 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.97 }}
+                    transition={{ duration: 0.3 }}
+                    className="rounded-xl overflow-hidden"
+                    style={{
+                      background: isBig
+                        ? "linear-gradient(135deg, oklch(0.1 0.03 142 / 0.9), oklch(0.08 0.02 142 / 0.7))"
+                        : "linear-gradient(135deg, oklch(0.1 0.03 22 / 0.9), oklch(0.08 0.02 22 / 0.7))",
+                      border: isBig
+                        ? "1px solid oklch(0.82 0.22 142 / 0.5)"
+                        : "1px solid oklch(0.65 0.28 22 / 0.5)",
+                      boxShadow: isBig
+                        ? "0 0 20px oklch(0.82 0.22 142 / 0.2), 0 0 40px oklch(0.82 0.22 142 / 0.1)"
+                        : "0 0 20px oklch(0.65 0.28 22 / 0.2), 0 0 40px oklch(0.65 0.28 22 / 0.1)",
+                    }}
+                  >
+                    {/* Formula line */}
+                    <div
+                      className="px-4 py-2 flex items-center justify-center gap-2"
                       style={{
-                        background: "oklch(0.13 0.03 60 / 0.7)",
-                        border: "1px solid oklch(0.88 0.22 60 / 0.5)",
-                        boxShadow: "0 0 12px oklch(0.88 0.22 60 / 0.15)",
+                        borderBottom: isBig
+                          ? "1px solid oklch(0.82 0.22 142 / 0.15)"
+                          : "1px solid oklch(0.65 0.28 22 / 0.15)",
                       }}
                     >
-                      <AlertTriangle
-                        className="w-4 h-4 shrink-0"
-                        style={{ color: "oklch(0.88 0.22 60)" }}
-                      />
-                      <p
-                        className="text-xs font-bold tracking-wider"
+                      <span
+                        className="text-sm font-bold tracking-widest"
+                        style={{
+                          color: "oklch(0.88 0.18 200)",
+                          fontFamily: '"Geist Mono", monospace',
+                        }}
+                      >
+                        {num1}
+                      </span>
+                      <span
+                        style={{
+                          color: "oklch(0.5 0.06 200)",
+                          fontFamily: '"Geist Mono", monospace',
+                          fontSize: "1rem",
+                        }}
+                      >
+                        +
+                      </span>
+                      <span
+                        className="text-sm font-bold tracking-widest"
+                        style={{
+                          color: "oklch(0.88 0.18 200)",
+                          fontFamily: '"Geist Mono", monospace',
+                        }}
+                      >
+                        {num2}
+                      </span>
+                      <span
+                        style={{
+                          color: "oklch(0.5 0.06 200)",
+                          fontFamily: '"Geist Mono", monospace',
+                        }}
+                      >
+                        =
+                      </span>
+                      <span
+                        className="text-sm font-bold"
                         style={{
                           color: "oklch(0.88 0.22 60)",
                           fontFamily: '"Geist Mono", monospace',
+                          textShadow: "0 0 8px oklch(0.88 0.22 60 / 0.5)",
                         }}
                       >
-                        ⚠️ ALERT: Streak ज़्यादा है, reversal possible
+                        {sumVal}
+                      </span>
+                      <span
+                        style={{
+                          color: "oklch(0.4 0.05 200)",
+                          fontFamily: '"Geist Mono", monospace',
+                          fontSize: "0.7rem",
+                        }}
+                      >
+                        → last digit →
+                      </span>
+                      <span
+                        className="text-sm font-bold"
+                        style={{
+                          color: "oklch(0.92 0.22 60)",
+                          fontFamily: '"Geist Mono", monospace',
+                          textShadow: "0 0 10px oklch(0.92 0.22 60 / 0.7)",
+                        }}
+                      >
+                        {resultDigit}
+                      </span>
+                    </div>
+
+                    {/* BIG / SMALL result */}
+                    <div className="py-4 text-center">
+                      <motion.p
+                        key={resultLabel}
+                        initial={{ scale: 0.8, opacity: 0 }}
+                        animate={{ scale: 1, opacity: 1 }}
+                        className="text-6xl sm:text-7xl font-bold tracking-wider"
+                        style={{
+                          fontFamily: '"Geist Mono", monospace',
+                          color: isBig
+                            ? "oklch(0.82 0.22 142)"
+                            : "oklch(0.65 0.28 22)",
+                          textShadow: isBig
+                            ? "0 0 20px oklch(0.82 0.22 142 / 0.7), 0 0 40px oklch(0.82 0.22 142 / 0.4)"
+                            : "0 0 20px oklch(0.65 0.28 22 / 0.7), 0 0 40px oklch(0.65 0.28 22 / 0.4)",
+                        }}
+                      >
+                        {resultLabel}
+                      </motion.p>
+                      <p
+                        className="text-xs mt-1 tracking-widest"
+                        style={{
+                          color: isBig
+                            ? "oklch(0.55 0.12 142)"
+                            : "oklch(0.55 0.15 22)",
+                          fontFamily: '"Geist Mono", monospace',
+                        }}
+                      >
+                        {isBig ? "Result ≥ 5 → BIG" : "Result < 5 → SMALL"}
+                      </p>
+                    </div>
+
+                    {/* Add to AI History button */}
+                    <div
+                      className="px-4 pb-4"
+                      style={{
+                        borderTop: isBig
+                          ? "1px solid oklch(0.82 0.22 142 / 0.15)"
+                          : "1px solid oklch(0.65 0.28 22 / 0.15)",
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={handleAddResult}
+                        data-ocid="calc.submit_button"
+                        className="w-full mt-3 py-2.5 rounded-lg text-xs font-bold tracking-widest transition-all hover:scale-[1.01] active:scale-[0.99]"
+                        style={{
+                          background: isBig
+                            ? "oklch(0.82 0.22 142)"
+                            : "oklch(0.65 0.28 22)",
+                          color: "oklch(0.05 0.01 240)",
+                          fontFamily: '"Geist Mono", monospace',
+                          letterSpacing: "0.12em",
+                          boxShadow: isBig
+                            ? "0 0 12px oklch(0.82 0.22 142 / 0.4)"
+                            : "0 0 12px oklch(0.65 0.28 22 / 0.4)",
+                        }}
+                      >
+                        ➕ ADD TO AI ANALYSIS HISTORY
+                      </button>
+                    </div>
+                  </motion.div>
+                ) : (
+                  <motion.div
+                    key="waiting"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="py-5 text-center rounded-xl"
+                    style={{
+                      background: "oklch(0.075 0.01 220)",
+                      border: "1px dashed oklch(0.72 0.2 200 / 0.2)",
+                    }}
+                  >
+                    <p
+                      className="text-xs tracking-widest"
+                      style={{
+                        color: "oklch(0.38 0.05 200)",
+                        fontFamily: '"Geist Mono", monospace',
+                      }}
+                    >
+                      ENTER BOTH NUMBERS TO SEE RESULT
+                    </p>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          </div>
+        </motion.div>
+
+        {/* ─── DEEPSEEK R1 AI Analysis Panel ─── */}
+        <motion.div
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5, delay: 0.2 }}
+          className="w-full max-w-lg"
+        >
+          <div
+            className="circuit-border rounded-xl overflow-hidden"
+            style={{
+              background:
+                "linear-gradient(160deg, oklch(0.09 0.014 210), oklch(0.07 0.01 220))",
+              boxShadow:
+                "0 0 30px oklch(0.78 0.22 200 / 0.12), 0 0 60px oklch(0.78 0.22 200 / 0.06)",
+              borderColor: "oklch(0.72 0.2 200 / 0.35)",
+            }}
+          >
+            {/* Panel header */}
+            <div
+              className="px-5 py-3 flex items-center justify-between"
+              style={{
+                background: "oklch(0.1 0.018 210)",
+                borderBottom: "1px solid oklch(0.78 0.22 200 / 0.2)",
+              }}
+            >
+              <div className="flex items-center gap-2">
+                <Cpu
+                  className="w-4 h-4"
+                  style={{ color: "oklch(0.78 0.22 200)" }}
+                />
+                <span
+                  className="text-xs tracking-widest font-bold"
+                  style={{
+                    color: "oklch(0.78 0.22 200)",
+                    fontFamily: '"Geist Mono", monospace',
+                  }}
+                >
+                  🤖 DEEPSEEK R1 AI ANALYSIS
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span
+                  className="text-xs"
+                  style={{
+                    color: "oklch(0.42 0.06 200)",
+                    fontFamily: '"Geist Mono", monospace',
+                  }}
+                >
+                  {resultHistory.length}/{MAX_HISTORY}
+                </span>
+                <Activity
+                  className="w-3.5 h-3.5"
+                  style={{ color: "oklch(0.72 0.2 200 / 0.6)" }}
+                />
+              </div>
+            </div>
+
+            {resultHistory.length < 3 ? (
+              /* Not enough data state */
+              <div className="px-5 py-8 text-center" data-ocid="ai.empty_state">
+                <p
+                  className="text-xs tracking-widest mb-2"
+                  style={{
+                    color: "oklch(0.45 0.06 200)",
+                    fontFamily: '"Geist Mono", monospace',
+                  }}
+                >
+                  ⏳ COLLECTING DATA...
+                </p>
+                <p
+                  className="text-xs"
+                  style={{
+                    color: "oklch(0.32 0.04 200)",
+                    fontFamily: '"Geist Mono", monospace',
+                  }}
+                >
+                  Add at least 3 results to activate AI analysis
+                </p>
+                <div
+                  className="mt-3 flex justify-center gap-1.5"
+                  aria-hidden="true"
+                >
+                  {[1, 2, 3].map((i) => (
+                    <div
+                      key={i}
+                      className="w-2 h-2 rounded-full"
+                      style={{
+                        background:
+                          resultHistory.length >= i
+                            ? "oklch(0.82 0.22 142)"
+                            : "oklch(0.2 0.02 240)",
+                        boxShadow:
+                          resultHistory.length >= i
+                            ? "0 0 6px oklch(0.82 0.22 142 / 0.6)"
+                            : "none",
+                      }}
+                    />
+                  ))}
+                </div>
+              </div>
+            ) : analysis ? (
+              <div className="px-5 py-4 space-y-3">
+                {/* ─── Entry Status Banner ─── */}
+                <AnimatePresence mode="wait">
+                  {analysis.entryAllowed ? (
+                    <motion.div
+                      key="entry-allowed"
+                      initial={{ opacity: 0, scale: 0.97 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.97 }}
+                      data-ocid="ai.success_state"
+                      className="px-4 py-3 rounded-lg flex items-center justify-center gap-2"
+                      style={{
+                        background: "oklch(0.1 0.03 142 / 0.8)",
+                        border: "1px solid oklch(0.82 0.22 142 / 0.5)",
+                        boxShadow:
+                          "0 0 16px oklch(0.82 0.22 142 / 0.2), 0 0 32px oklch(0.82 0.22 142 / 0.1)",
+                        animation: "entryGlow 2s ease-in-out infinite",
+                      }}
+                    >
+                      <span
+                        className="text-sm font-bold tracking-widest text-center"
+                        style={{
+                          color: "oklch(0.88 0.22 142)",
+                          fontFamily: '"Geist Mono", monospace',
+                          textShadow: "0 0 10px oklch(0.82 0.22 142 / 0.6)",
+                        }}
+                      >
+                        ✅ ENTRY ALLOWED — SURESHOT PREDICTION
+                      </span>
+                    </motion.div>
+                  ) : (
+                    <motion.div
+                      key="entry-blocked"
+                      initial={{ opacity: 0, scale: 0.97 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.97 }}
+                      data-ocid="ai.error_state"
+                      className="px-4 py-3 rounded-lg"
+                      style={{
+                        background: "oklch(0.13 0.03 22 / 0.8)",
+                        border: "1px solid oklch(0.65 0.28 22 / 0.5)",
+                        boxShadow: "0 0 12px oklch(0.65 0.28 22 / 0.15)",
+                      }}
+                    >
+                      <p
+                        className="text-sm font-bold tracking-widest text-center"
+                        style={{
+                          color: "oklch(0.72 0.28 22)",
+                          fontFamily: '"Geist Mono", monospace',
+                        }}
+                      >
+                        ❌ RISK — NO ENTRY ALLOWED
+                      </p>
+                      <p
+                        className="text-xs text-center mt-1 tracking-wider"
+                        style={{
+                          color: "oklch(0.5 0.12 22)",
+                          fontFamily: '"Geist Mono", monospace',
+                        }}
+                      >
+                        Wait for next period
                       </p>
                     </motion.div>
                   )}
-                </div>
-              </div>
-            </motion.div>
-          );
-        })()}
+                </AnimatePresence>
 
-        {/* ─── Betting History ─── */}
+                {/* Stats grid */}
+                <div className="grid grid-cols-2 gap-3">
+                  {/* Streak */}
+                  <div
+                    className="px-3 py-2.5 rounded"
+                    style={{
+                      background: "oklch(0.085 0.012 240)",
+                      border: `1px solid ${analysis.streakAlert ? "oklch(0.88 0.22 60 / 0.4)" : "oklch(0.72 0.2 200 / 0.15)"}`,
+                    }}
+                  >
+                    <p
+                      className="text-xs tracking-wider mb-1"
+                      style={{
+                        color: "oklch(0.4 0.05 200)",
+                        fontFamily: '"Geist Mono", monospace',
+                      }}
+                    >
+                      🔥 STREAK
+                    </p>
+                    <p
+                      className="text-xl font-bold"
+                      style={{
+                        color: analysis.streakAlert
+                          ? "oklch(0.88 0.22 60)"
+                          : "oklch(0.78 0.22 200)",
+                        fontFamily: '"Geist Mono", monospace',
+                      }}
+                    >
+                      {analysis.streak}{" "}
+                      <span className="text-sm">{analysis.streakType}</span>
+                    </p>
+                  </div>
+
+                  {/* DeepSeek R1 Prediction */}
+                  <div
+                    className="px-3 py-2.5 rounded"
+                    style={{
+                      background:
+                        analysis.aiPrediction === "BIG"
+                          ? "oklch(0.1 0.025 142 / 0.5)"
+                          : "oklch(0.1 0.025 22 / 0.5)",
+                      border: `1px solid ${analysis.aiPrediction === "BIG" ? "oklch(0.82 0.22 142 / 0.35)" : "oklch(0.65 0.28 22 / 0.35)"}`,
+                    }}
+                  >
+                    <p
+                      className="text-xs tracking-wider mb-1"
+                      style={{
+                        color: "oklch(0.4 0.05 200)",
+                        fontFamily: '"Geist Mono", monospace',
+                      }}
+                    >
+                      🤖 DEEPSEEK R1
+                    </p>
+                    <p
+                      className="text-xl font-bold"
+                      style={{
+                        color:
+                          analysis.aiPrediction === "BIG"
+                            ? "oklch(0.82 0.22 142)"
+                            : "oklch(0.65 0.28 22)",
+                        fontFamily: '"Geist Mono", monospace',
+                      }}
+                    >
+                      {analysis.aiPrediction}
+                      <span
+                        className="text-xs ml-1"
+                        style={{ color: "oklch(0.5 0.06 200)" }}
+                      >
+                        {analysis.aiConfidence}%
+                      </span>
+                    </p>
+                  </div>
+                </div>
+
+                {/* Probability bars */}
+                <div
+                  className="px-3 py-3 rounded space-y-2"
+                  style={{
+                    background: "oklch(0.085 0.012 240)",
+                    border: "1px solid oklch(0.72 0.2 200 / 0.12)",
+                  }}
+                >
+                  {/* BIG */}
+                  <div>
+                    <div className="flex justify-between mb-1">
+                      <span
+                        className="text-xs tracking-wider"
+                        style={{
+                          color: "oklch(0.82 0.22 142)",
+                          fontFamily: '"Geist Mono", monospace',
+                        }}
+                      >
+                        📈 BIG
+                      </span>
+                      <span
+                        className="text-xs font-bold"
+                        style={{
+                          color: "oklch(0.82 0.22 142)",
+                          fontFamily: '"Geist Mono", monospace',
+                        }}
+                      >
+                        {analysis.bigProb}%
+                      </span>
+                    </div>
+                    <div
+                      className="h-2 rounded-full overflow-hidden"
+                      style={{ background: "oklch(0.12 0.02 240)" }}
+                    >
+                      <motion.div
+                        initial={{ width: 0 }}
+                        animate={{ width: `${analysis.bigProb}%` }}
+                        transition={{ duration: 0.8, ease: "easeOut" }}
+                        className="h-full rounded-full"
+                        style={{
+                          background: "oklch(0.82 0.22 142)",
+                          boxShadow: "0 0 6px oklch(0.82 0.22 142 / 0.5)",
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* SMALL */}
+                  <div>
+                    <div className="flex justify-between mb-1">
+                      <span
+                        className="text-xs tracking-wider"
+                        style={{
+                          color: "oklch(0.65 0.28 22)",
+                          fontFamily: '"Geist Mono", monospace',
+                        }}
+                      >
+                        📉 SMALL
+                      </span>
+                      <span
+                        className="text-xs font-bold"
+                        style={{
+                          color: "oklch(0.65 0.28 22)",
+                          fontFamily: '"Geist Mono", monospace',
+                        }}
+                      >
+                        {analysis.smallProb}%
+                      </span>
+                    </div>
+                    <div
+                      className="h-2 rounded-full overflow-hidden"
+                      style={{ background: "oklch(0.12 0.02 240)" }}
+                    >
+                      <motion.div
+                        initial={{ width: 0 }}
+                        animate={{ width: `${analysis.smallProb}%` }}
+                        transition={{ duration: 0.8, ease: "easeOut" }}
+                        className="h-full rounded-full"
+                        style={{
+                          background: "oklch(0.65 0.28 22)",
+                          boxShadow: "0 0 6px oklch(0.65 0.28 22 / 0.5)",
+                        }}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Streak Alert */}
+                {analysis.streakAlert && (
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.95 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    className="flex items-center gap-2 px-3 py-2.5 rounded"
+                    style={{
+                      background: "oklch(0.13 0.03 60 / 0.7)",
+                      border: "1px solid oklch(0.88 0.22 60 / 0.5)",
+                      boxShadow: "0 0 12px oklch(0.88 0.22 60 / 0.15)",
+                    }}
+                  >
+                    <AlertTriangle
+                      className="w-4 h-4 shrink-0"
+                      style={{ color: "oklch(0.88 0.22 60)" }}
+                    />
+                    <p
+                      className="text-xs font-bold tracking-wider"
+                      style={{
+                        color: "oklch(0.88 0.22 60)",
+                        fontFamily: '"Geist Mono", monospace',
+                      }}
+                    >
+                      ⚠️ ALERT: High Streak — Reversal Possible
+                    </p>
+                  </motion.div>
+                )}
+
+                {/* Clear history */}
+                <button
+                  type="button"
+                  onClick={handleClearHistory}
+                  data-ocid="ai.delete_button"
+                  className="w-full py-2 rounded text-xs font-bold tracking-widest transition-all hover:opacity-80"
+                  style={{
+                    background: "oklch(0.1 0.015 240)",
+                    border: "1px solid oklch(0.65 0.28 22 / 0.3)",
+                    color: "oklch(0.55 0.18 22)",
+                    fontFamily: '"Geist Mono", monospace',
+                  }}
+                >
+                  🗑 CLEAR HISTORY
+                </button>
+              </div>
+            ) : null}
+          </div>
+        </motion.div>
+
+        {/* ─── Visitor / Result History ─── */}
         <motion.div
-          initial={{ opacity: 0, y: 20 }}
+          initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.7 }}
-          className="mt-6 w-full max-w-lg"
+          transition={{ duration: 0.5, delay: 0.3 }}
+          className="w-full max-w-lg"
         >
           <div
             className="circuit-border rounded-xl overflow-hidden"
@@ -1230,7 +1337,6 @@ export default function PredictionPage({ onLogout }: PredictionPageProps) {
               boxShadow: "0 0 20px oklch(0.82 0.22 142 / 0.05)",
             }}
           >
-            {/* History header */}
             <div
               className="px-5 py-3 flex items-center justify-between"
               style={{
@@ -1250,7 +1356,7 @@ export default function PredictionPage({ onLogout }: PredictionPageProps) {
                     fontFamily: '"Geist Mono", monospace',
                   }}
                 >
-                  BETTING HISTORY
+                  RESULT HISTORY
                 </span>
               </div>
               <div className="flex items-center gap-1.5">
@@ -1270,10 +1376,12 @@ export default function PredictionPage({ onLogout }: PredictionPageProps) {
               </div>
             </div>
 
-            {/* History table */}
             <div className="px-4 py-3">
-              {bettingHistory.length === 0 ? (
-                <div className="py-8 text-center">
+              {resultHistory.length === 0 ? (
+                <div
+                  className="py-8 text-center"
+                  data-ocid="history.empty_state"
+                >
                   <p
                     className="text-xs tracking-widest"
                     style={{
@@ -1281,27 +1389,27 @@ export default function PredictionPage({ onLogout }: PredictionPageProps) {
                       fontFamily: '"Geist Mono", monospace',
                     }}
                   >
-                    NO HISTORY YET — PREDICTIONS WILL APPEAR HERE
+                    NO RESULTS YET — ADD NUMBERS ABOVE
                   </p>
                 </div>
               ) : (
                 <div className="space-y-1.5">
                   {/* Table head */}
                   <div
-                    className="grid grid-cols-3 gap-2 px-3 py-1.5 rounded text-xs"
+                    className="grid grid-cols-4 gap-2 px-3 py-1.5 rounded text-xs"
                     style={{
                       color: "oklch(0.38 0.05 200)",
                       fontFamily: '"Geist Mono", monospace',
                     }}
                   >
                     <span className="tracking-wider">#PERIOD</span>
+                    <span className="text-center tracking-wider">CALC</span>
                     <span className="text-center tracking-wider">RESULT</span>
-                    <span className="text-right tracking-wider">STATUS</span>
+                    <span className="text-right tracking-wider">B/S</span>
                   </div>
 
-                  {/* Table rows */}
                   <AnimatePresence>
-                    {bettingHistory.map((entry, idx) => {
+                    {resultHistory.map((entry, idx) => {
                       const entryIsBig = entry.result === "BIG";
                       return (
                         <motion.div
@@ -1310,7 +1418,8 @@ export default function PredictionPage({ onLogout }: PredictionPageProps) {
                           animate={{ opacity: 1, x: 0 }}
                           exit={{ opacity: 0, x: 10 }}
                           transition={{ delay: idx * 0.03 }}
-                          className="grid grid-cols-3 gap-2 px-3 py-2 rounded items-center"
+                          data-ocid={`history.item.${idx + 1}`}
+                          className="grid grid-cols-4 gap-2 px-3 py-2 rounded items-center"
                           style={{
                             background:
                               idx === 0
@@ -1326,14 +1435,26 @@ export default function PredictionPage({ onLogout }: PredictionPageProps) {
                         >
                           {/* Period */}
                           <span
-                            className="text-xs font-mono truncate"
+                            className="text-xs truncate"
                             style={{
                               color: "oklch(0.45 0.06 200)",
+                              fontFamily: '"Geist Mono", monospace',
+                              fontSize: "0.6rem",
+                            }}
+                          >
+                            {entry.period.slice(-6)}
+                          </span>
+
+                          {/* Calc */}
+                          <span
+                            className="text-xs text-center"
+                            style={{
+                              color: "oklch(0.55 0.1 60)",
                               fontFamily: '"Geist Mono", monospace',
                               fontSize: "0.65rem",
                             }}
                           >
-                            {entry.period.slice(-6)}
+                            {entry.num1}+{entry.num2}={entry.resultDigit}
                           </span>
 
                           {/* Result badge */}
@@ -1349,27 +1470,17 @@ export default function PredictionPage({ onLogout }: PredictionPageProps) {
                                   : "oklch(0.65 0.28 22)",
                                 fontFamily: '"Geist Mono", monospace',
                                 boxShadow: entryIsBig
-                                  ? "0 0 6px oklch(0.82 0.22 142 / 0.3)"
-                                  : "0 0 6px oklch(0.65 0.28 22 / 0.3)",
+                                  ? "0 0 5px oklch(0.82 0.22 142 / 0.25)"
+                                  : "0 0 5px oklch(0.65 0.28 22 / 0.25)",
+                                fontSize: "0.6rem",
                               }}
                             >
                               {entry.result}
                             </span>
                           </div>
 
-                          {/* Win/Loss label */}
-                          <div className="flex justify-end items-center gap-1">
-                            <span
-                              className="text-xs font-bold"
-                              style={{
-                                color: entryIsBig
-                                  ? "oklch(0.75 0.22 142)"
-                                  : "oklch(0.65 0.28 22)",
-                                fontFamily: '"Geist Mono", monospace',
-                              }}
-                            >
-                              {entryIsBig ? "WIN" : "LOSS"}
-                            </span>
+                          {/* BIG/SMALL indicator */}
+                          <div className="flex justify-end">
                             <span>{entryIsBig ? "🟢" : "🔴"}</span>
                           </div>
                         </motion.div>
@@ -1383,51 +1494,42 @@ export default function PredictionPage({ onLogout }: PredictionPageProps) {
         </motion.div>
       </main>
 
-      {/* ─── Telegram CTA ─── */}
-      <div className="relative z-10 px-4 pb-4 sm:px-6">
-        {/* Register CTA */}
-        <div className="max-w-lg mb-3">
-          <a
-            href="https://www.hyderabad91.com/#/register?invitationCode=4841620269921"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="w-full flex items-center justify-center gap-2 py-3 rounded text-sm font-bold tracking-widest transition-all hover:scale-[1.01]"
-            style={{
-              background:
-                "linear-gradient(135deg, oklch(0.72 0.22 140), oklch(0.65 0.25 145))",
-              color: "oklch(0.05 0.01 240)",
-              fontFamily: '"Geist Mono", monospace',
-              letterSpacing: "0.15em",
-              boxShadow:
-                "0 0 20px oklch(0.72 0.22 140 / 0.4), 0 0 40px oklch(0.72 0.22 140 / 0.2)",
-              textDecoration: "none",
-            }}
-          >
-            <UserPlus className="w-4 h-4" />🎯 REGISTER NOW — FREE ACCOUNT
-            <ExternalLink className="w-3.5 h-3.5 opacity-70" />
-          </a>
-        </div>
-
+      {/* ─── Bottom CTAs ─── */}
+      <div className="relative z-10 px-4 pb-4 sm:px-6 space-y-3">
+        {/* Telegram Box */}
         <div
           className="max-w-lg rounded-lg p-4 flex flex-col sm:flex-row items-center justify-between gap-3 circuit-border"
+          data-ocid="telegram.card"
           style={{
             background: "oklch(0.09 0.01 230)",
             borderColor: "oklch(0.72 0.2 200 / 0.3)",
           }}
         >
-          <p
-            className="text-xs tracking-widest text-center sm:text-left"
-            style={{
-              color: "oklch(0.55 0.08 200)",
-              fontFamily: '"Geist Mono", monospace',
-            }}
-          >
-            PASSWORD CHAHIYE TO MESSAGE KARO 👇
-          </p>
+          <div>
+            <p
+              className="text-xs font-bold tracking-widest"
+              style={{
+                color: "oklch(0.55 0.08 200)",
+                fontFamily: '"Geist Mono", monospace',
+              }}
+            >
+              🔐 NEED PASSWORD? MESSAGE US ON TELEGRAM
+            </p>
+            <p
+              className="text-xs mt-0.5 tracking-wider"
+              style={{
+                color: "oklch(0.38 0.05 200)",
+                fontFamily: '"Geist Mono", monospace',
+              }}
+            >
+              Password chahiye to message karo 👇
+            </p>
+          </div>
           <a
             href="https://t.me/propredictiongowin"
             target="_blank"
             rel="noopener noreferrer"
+            data-ocid="telegram.link"
             className="inline-flex items-center gap-2 px-4 py-2 rounded text-xs font-bold tracking-widest transition-all hover:scale-105 shrink-0"
             style={{
               background: "oklch(0.46 0.18 230)",
@@ -1437,14 +1539,67 @@ export default function PredictionPage({ onLogout }: PredictionPageProps) {
               textDecoration: "none",
             }}
           >
-            <MessageCircle className="w-3.5 h-3.5" />
-            TELEGRAM
+            <MessageCircle className="w-3.5 h-3.5" />📱 TELEGRAM
+          </a>
+        </div>
+
+        {/* Register Box */}
+        <div
+          className="max-w-lg rounded-lg p-4 flex flex-col sm:flex-row items-center justify-between gap-3"
+          data-ocid="register.card"
+          style={{
+            background:
+              "linear-gradient(135deg, oklch(0.1 0.02 60 / 0.8), oklch(0.08 0.015 55 / 0.8))",
+            border: "1px solid oklch(0.72 0.25 60 / 0.4)",
+            boxShadow: "0 0 20px oklch(0.72 0.25 60 / 0.1)",
+          }}
+        >
+          <div>
+            <p
+              className="text-xs font-bold tracking-widest"
+              style={{
+                color: "oklch(0.82 0.22 60)",
+                fontFamily: '"Geist Mono", monospace',
+                textShadow: "0 0 8px oklch(0.82 0.22 60 / 0.4)",
+              }}
+            >
+              🔗 REGISTER & START WINNING ⚡ LOTTERY LINK
+            </p>
+            <p
+              className="text-xs mt-0.5 tracking-wider"
+              style={{
+                color: "oklch(0.55 0.12 60)",
+                fontFamily: '"Geist Mono", monospace',
+              }}
+            >
+              New account? Register & start playing
+            </p>
+          </div>
+          <a
+            href="https://www.hyderabad91.com/#/register?invitationCode=4841620269921"
+            target="_blank"
+            rel="noopener noreferrer"
+            data-ocid="register.link"
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded text-xs font-bold tracking-widest transition-all hover:scale-105 shrink-0"
+            style={{
+              background:
+                "linear-gradient(135deg, oklch(0.72 0.22 140), oklch(0.65 0.25 145))",
+              color: "oklch(0.05 0.01 240)",
+              fontFamily: '"Geist Mono", monospace',
+              boxShadow:
+                "0 0 16px oklch(0.72 0.22 140 / 0.5), 0 0 32px oklch(0.72 0.22 140 / 0.25)",
+              textDecoration: "none",
+            }}
+          >
+            <UserPlus className="w-3.5 h-3.5" />
+            REGISTER NOW 🎯
+            <ExternalLink className="w-3 h-3 opacity-70" />
           </a>
         </div>
 
         {/* Footer */}
         <p
-          className="text-center text-xs mt-4 max-w-lg"
+          className="text-center text-xs mt-2 max-w-lg"
           style={{
             color: "oklch(0.25 0.02 200)",
             fontFamily: '"Geist Mono", monospace',
@@ -1470,6 +1625,10 @@ export default function PredictionPage({ onLogout }: PredictionPageProps) {
         .text-marquee {
           display: inline-block;
           animation: marquee 28s linear infinite;
+        }
+        @keyframes entryGlow {
+          0%, 100% { box-shadow: 0 0 16px oklch(0.82 0.22 142 / 0.2), 0 0 32px oklch(0.82 0.22 142 / 0.1); }
+          50% { box-shadow: 0 0 24px oklch(0.82 0.22 142 / 0.5), 0 0 48px oklch(0.82 0.22 142 / 0.25); }
         }
       `}</style>
     </div>

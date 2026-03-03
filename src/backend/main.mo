@@ -5,9 +5,9 @@ import Text "mo:core/Text";
 import Runtime "mo:core/Runtime";
 import Iter "mo:core/Iter";
 import Nat "mo:core/Nat";
-import Migration "migration";
 
-(with migration = Migration.run)
+
+
 actor {
   let periodLengthSeconds : Int = 60;
   let password = "SURESHOTALOK";

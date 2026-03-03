@@ -1,10 +1,11 @@
 import { Toaster } from "@/components/ui/sonner";
 import { useEffect, useState } from "react";
+import WelcomeScreen from "./components/WelcomeScreen";
 import LoginPage from "./pages/LoginPage";
 import PredictionPage from "./pages/PredictionPage";
 import { isSessionValid } from "./utils/session";
 
-type AppView = "login" | "prediction";
+type AppView = "login" | "welcome" | "prediction";
 
 export default function App() {
   const [view, setView] = useState<AppView>("login");
@@ -56,7 +57,13 @@ export default function App() {
         }}
       />
       {view === "login" ? (
-        <LoginPage onLoginSuccess={() => setView("prediction")} />
+        <LoginPage onLoginSuccess={() => setView("welcome")} />
+      ) : view === "welcome" ? (
+        <>
+          {/* Show prediction page underneath while welcome plays */}
+          <PredictionPage onLogout={() => setView("login")} />
+          <WelcomeScreen onComplete={() => setView("prediction")} />
+        </>
       ) : (
         <PredictionPage onLogout={() => setView("login")} />
       )}

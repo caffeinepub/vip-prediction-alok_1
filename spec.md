@@ -1,34 +1,40 @@
 # VIP Prediction Alok
 
 ## Current State
-- Login page with password `SURESHOTALOK` (5-day session)
-- Prediction page with 1-min WinGo-style timer and period number
-- Prediction reveals BIG/SMALL 15 seconds before end
-- Download prediction as PNG screenshot
-- Telegram CTA box at bottom
-- No admin panel
+Website has multiple input boxes (3-digit + 2-digit), various panels, welcome animation, APK download, betting history, etc. from previous versions.
 
 ## Requested Changes (Diff)
 
 ### Add
-- **APK download button**: A prominent button on PredictionPage (and possibly LoginPage) linking to a placeholder APK download URL (user will replace later). Shows an Android download icon.
-- **Welcome sound**: Play a short welcome/notification sound when the app first loads (on LoginPage mount).
-- **Header subtitle text**: Below the main title, add the text "WINGO 1-MIN RESULT TRACKING Analysis 🎯 DIRECT ANSWER:100% SURESHOT Big - Small prediction" prominently on PredictionPage header.
-- **Register link**: Add a "REGISTER" button/link pointing to https://www.hyderabad91.com/#/register?invitationCode=4841620269921 — visible on both LoginPage and PredictionPage.
-- **Left-aligned layout**: Shift main content alignment to the left side of the screen instead of centered.
-- **Betting history panel**: At the bottom of PredictionPage, show last N results as WIN/LOSS history with period numbers and outcome labels.
+- Only 2 input boxes for "Last 2 Numbers" entry (0-9 each)
+- When 2 numbers entered, calculate result (0-9) and show BIG (5-9) or SMALL (0-4)
+- Visitor list/counter display
+- DEEPSEEK R1 AI Analysis Panel: full calculation, sureshot prediction, "ENTRY ALLOWED" or "RISK - NO ENTRY" status
+- Login with password SURESHOTALOK (user session management)
+- Telegram box with link: https://t.me/propredictiongowin (text: "Password chahiye to message karo")
+- Register link box: https://www.hyderabad91.com/#/register?invitationCode=4841620269921
+- WinGo 1-minute style countdown timer (period number)
 
 ### Modify
-- **PredictionPage layout**: Left-align the main prediction card and stats instead of centering them.
-- **Header**: Add the subtitle/tagline text below the VIP PREDICTION ALOK branding.
+- Remove all previously added features EXCEPT visitor list
+- Simplify to clean focused UI
 
 ### Remove
-- Nothing to remove.
+- 3-digit input box
+- Welcome animation/matrix screen
+- APK download button
+- Betting history panel
+- Nano AI panel (replace with DEEPSEEK R1 panel)
+- Big/Small live prediction banner
 
 ## Implementation Plan
-1. Add welcome sound effect using Web Audio API (generated tone) that plays on LoginPage mount.
-2. Add APK download button on PredictionPage header area (placeholder link `#apk-download`).
-3. Add Register link button on both LoginPage and PredictionPage pointing to hyderabad91.com register URL.
-4. Update PredictionPage header to include the tagline "WINGO 1-MIN RESULT TRACKING Analysis 🎯 DIRECT ANSWER:100% SURESHOT Big - Small prediction".
-5. Update PredictionPage layout to be left-aligned (use `items-start` / `justify-start` instead of center).
-6. Add BettingHistory component at bottom of PredictionPage that stores last 10 period results (BIG/SMALL) in localStorage and shows them as WIN/LOSS rows.
+1. Backend: store visitor count, track logged-in sessions
+2. Frontend login page: password entry, session with 5-day expiry
+3. Main page after login:
+   - WinGo 1-min countdown timer + period number at top
+   - Two number input boxes (Last Number 1, Last Number 2, range 0-9)
+   - Auto-calculate sum/result and show BIG/SMALL
+   - DEEPSEEK R1 AI panel: probability analysis, streak detection, ENTRY ALLOWED / NO ENTRY status
+   - Visitor counter
+   - Telegram box (password help)
+   - Register link box
